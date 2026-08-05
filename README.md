@@ -11,99 +11,33 @@
 ██╔═══╝ ██║   ██║██╔══██╗   ██║   ██╔══╝  ██╔══██╗
 ██║     ╚██████╔╝██║  ██║   ██║   ███████╗██║  ██║
 ╚═╝      ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
-  ```                                                                                                         
-                                                                       
-                                                                       
-<p align="left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/version-v1.0.0-181717.svg?style=flat&logo=vercel&logoColor=white&mode=dark" />
-    <img alt="Version 1.0.0" src="https://shieldcn.dev/badge/version-v1.0.0-181717.svg?style=flat&logo=vercel&logoColor=black&mode=light" />
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Go.svg?variant=secondary&size=sm&logo=go&logoColor=00ADD8&mode=dark" />
-    <img alt="Go" src="https://shieldcn.dev/badge/Go.svg?variant=secondary&size=sm&logo=go&logoColor=00ADD8&mode=light" />
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Firecracker.svg?variant=secondary&size=sm&logo=amazonaws&logoColor=FF9900&mode=dark" />
-    <img alt="Firecracker" src="https://shieldcn.dev/badge/Firecracker.svg?variant=secondary&size=sm&logo=amazonaws&logoColor=FF9900&mode=light" />
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/SQLite.svg?variant=secondary&size=sm&logo=sqlite&logoColor=003B57&mode=dark" />
-    <img alt="SQLite" src="https://shieldcn.dev/badge/SQLite.svg?variant=secondary&size=sm&logo=sqlite&logoColor=003B57&mode=light" />
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/gRPC.svg?variant=secondary&size=sm&logo=grpc&logoColor=6C4A9B&mode=dark" />
-    <img alt="gRPC" src="https://shieldcn.dev/badge/gRPC.svg?variant=secondary&size=sm&logo=grpc&logoColor=6C4A9B&mode=light" />
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Linux.svg?variant=secondary&size=sm&logo=linux&logoColor=FCC624&mode=dark" />
-    <img alt="Linux" src="https://shieldcn.dev/badge/Linux.svg?variant=secondary&size=sm&logo=linux&logoColor=FCC624&mode=light" />
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/MIT.svg?variant=secondary&size=sm&logo=opensourceinitiative&logoColor=3DA639&mode=dark" />
-    <img alt="MIT License" src="https://shieldcn.dev/badge/MIT.svg?variant=secondary&size=sm&logo=opensourceinitiative&logoColor=3DA639&mode=light" />
-  </picture>
-</p>
+```
 
 > **The missing control plane for Firecracker.** Deploy Docker images as isolated microVMs with automatic DNS, instant SSH, and Vercel-style preview deployments.
 
-**Spin up Firecracker microVMs from any Docker image or `docker-compose.yml`.** Get an instant live URL, native SSH access, and real-time traffic visibility—right from your terminal or dashboard. 
-
-It's the Vercel experience, but every deploy is a real, kernel-isolated microVM instead of a shared container.
-
 Built on [`firecracker-containerd`](https://github.com/firecracker-microvm/firecracker-containerd) — the same runtime AWS itself runs Fargate and Lambda workloads on. Porter is a control-plane UI/API sitting in front of it, not a from-scratch VMM orchestrator.
+
+MIT licensed. Self-hosted. Single-tenant by permanent design.
 
 ---
 
 ## 🚀 What Porter Does
 
-- **Deploy a single image** → `porter up --image redis:7` → running microVM in seconds, reachable at an auto-assigned URL
-- **Deploy a `docker-compose.yml`** → each service becomes its own microVM, booted in dependency order, all reachable on the same private network
-- **Domains, the Vercel way** — point one wildcard DNS record at Porter once. Every deploy gets its own subdomain automatically: a stable one for the current live version, plus a unique preview subdomain per deploy. Attach your own fully-owned domain to any service anytime via a CNAME
-- **SSH into any VM by name** through a single gateway — no IP hunting, no per-VM key management
-- **Live traffic view** per service — method, path, status, latency — right in the dashboard, no log pipeline to wire up
-- **Dashboard** — Projects → Deployments, status at a glance, one-click stop/restart/delete/SSH/logs
+Porter brings the pieces of Fargate, Kubernetes, Vercel, and Fly.io that actually matter for a single self-hosted box, into one pure-Go binary:
+
+- **Scale like Fargate** — `deploy.replicas: 3` in your compose file, or `porter scale api 5` any time, and Porter boots identical, isolated microVMs to match
+- **Heal like Kubernetes** — declare a `healthcheck:`, set `restart: on-failure`, and Porter probes every replica, drains unhealthy ones out of traffic immediately, and replaces them automatically
+- **Discover like Kubernetes DNS** — every service gets a real name (`db.my-app.local`) that resolves to its healthy replicas, no manual IP wiring
+- **Deploy like Vercel** — wildcard domains, a stable URL for the live version, a unique preview URL for every deploy, real-time traffic view, all with zero DNS busywork after the first wildcard record
+- **Run like Fly.io** — single binary, single host, `porter up` and you're live
+- **Speak Compose natively** — bring your existing `docker-compose.yml`, each service becomes one or more real, kernel-isolated microVMs instead of containers
+- **Pure Go, no Docker required** — no Docker daemon anywhere in the loop, host or guest
+
+**Not** a Docker-in-VM system, **not** a full multi-host Kubernetes replacement, and **not** multi-tenant (see `BUILD.md` for why that last one is permanent, not a v1 limitation).
 
 ---
 
-## 🚫 What Porter Is Not
-
-- **Not** a Docker-in-VM system. The guest never runs a Docker daemon — `containerd`'s `firecracker-containerd` shim snapshots each compose service's image straight onto a microVM's root block device. One service, one VM, one kernel boundary.
-- **Not** a Kubernetes replacement. No scheduler, no multi-host bin-packing in v1.0.0. One host, one shared kernel image, as many microVMs as it can hold.
-- **Not** multi-tenant. v1.0.0 assumes one trusted operator per deployment.
-
----
-
-## 🏗️ Architecture at a Glance
-
-```
-┌───────────────────────────────────────────────────────────────┐
-│  Dashboard (Next.js/React)                                     │
-│  Projects → Deployments → Domains / Traffic / Logs / SSH        │
-└───────────────┬─────────────────────────────────────────────┘
-                │ REST + SSE
-┌───────────────▼─────────────────────────────────────────────┐
-│  Control API (Go)                                                │
-│  project/VM CRUD, compose parsing, domain records, state store   │
-└───────┬─────────────────┬─────────────────┬───────────────────┘
-        │                 │                 │
-┌───────▼──────┐  ┌────────▼────────┐  ┌──────▼───────────┐
-│ VM Manager   │  │ containerd +    │  │ SSH Gateway        │
-│ (containerd  │  │ firecracker-    │  │ (bastion, routes   │
-│  task client)│  │ containerd shim │  │  via task.Exec)     │
-└───────┬──────┘  └────────┬────────┘  └──────┬───────────┘
-        │                  │                  │
-┌───────▼──────────────────▼──────────────────▼───────────────────┐
-│  Host: containerd, jailer + Firecracker processes (shim-managed)  │
-│  Edge: Porter Gateway — routing, domains, TLS-ready, traffic log  │
-└───────────────────────────────────────────────────────────────┘
-```
-
-For the full deep dive, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
-
----
-
-## ⚡ Quickstart (Target UX for v1.0.0)
+## ⚡ Quickstart
 
 ```bash
 # 1. Install the Porter agent (one binary, needs KVM + root)
@@ -120,18 +54,22 @@ porter domain set-base example.com
 porter up --image redis:7 --name cache
 # → live at cache.example.com
 
-# 5. Deploy a docker-compose.yml
+# 5. Deploy a docker-compose.yml (with replicas, healthchecks, restart policy)
 porter up -f docker-compose.yml --name my-app
-# → each service live at <service>.my-app.example.com
-# → this specific deploy also live at <service>-<deploy-id>.my-app.example.com
+# → each service live at <service>.my-app.example.com, load-balanced
+#   across its healthy replicas
+# → services reach each other via db.my-app.local, api.my-app.local, etc.
 
-# 6. SSH into any service by name
+# 6. Scale a service up or down, any time
+porter scale api 5
+
+# 7. SSH into any service by name (or a specific replica: my-app-api-2)
 porter ssh my-app-api
 
-# 7. Attach your own domain to a service, any time
+# 8. Attach your own domain to a service, any time
 porter domains add shop.mybrand.com --service my-app-api
 
-# 8. Open the dashboard
+# 9. Open the dashboard
 porter dashboard   # http://localhost:3000
 ```
 
@@ -139,48 +77,17 @@ The CLI and dashboard talk to the same Control API — anything done in one show
 
 ---
 
-## 📚 Documents in This Set
+## 📚 Full Documentation
 
-| File | Purpose |
-|------|---------|
-| `README.md` | This file — overview, quickstart, directory layout |
-| `ARCHITECTURE.md` | Full system design: components, data flow, networking, SSH gateway, edge gateway |
-| `API_SPEC.md` | REST API reference for the Control API |
-| `COMPOSE_MAPPING.md` | Exact rules for translating `docker-compose.yml` → microVMs |
-| `SSH_ACCESS.md` | How the SSH gateway works, key management, guest-side setup |
-| `DOMAINS_AND_TRAFFIC.md` | Wildcard domain model, preview vs. production subdomains, custom domains, live traffic log |
-| `UI_SPEC.md` | Dashboard screens, components, states, and interaction flows |
-| `ROADMAP.md` | v1.0.0 scope, what's deferred, known limitations |
-| `DEPLOYMENT.md` | Host requirements, install steps, config reference |
-| `OSS_AND_SAAS_STRATEGY.md` | Why MIT, why single-tenant-forever, and how a future hosted product would relate to this repo without changing it |
+This README is intentionally short. The complete spec lives in two files:
 
----
-
-## 📁 Directory Layout (Target Repo Structure)
-
-```
-porter/
-├── backend/
-│   ├── cmd/
-│   │   ├── server/          # Control API + gateway + SSH gateway daemon
-│   │   └── cli/             # porter CLI (thin client over REST API)
-│   ├── internal/
-│   │   ├── api/             # HTTP handlers
-│   │   ├── vmmanager/       # containerd task client + firecracker-containerd config
-│   │   ├── compose/         # docker-compose.yml parser/mapper
-│   │   ├── gateway/         # routing, domains, traffic log
-│   │   ├── sshgw/           # SSH gateway (proxies to containerd task.Exec)
-│   │   ├── store/           # state persistence
-│   │   └── netmgr/          # CNI network config, bridges, IP allocation
-│   └── pkg/types/           # shared domain types
-├── frontend/                 # Next.js dashboard
-├── docs/                     # this document set
-└── deploy/                   # systemd units, install script, kernel build notes,
-                               # containerd + firecracker-containerd config
-```
+| File | Covers |
+|---|---|
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | System design, every component, data flow, the REST API reference, `docker-compose.yml` mapping rules, the domain/traffic model, and SSH access |
+| [`BUILD.md`](./BUILD.md) | Dashboard UI spec, host deployment guide, v1.0.0 roadmap/scope, and the OSS + future-SaaS strategy |
 
 ---
 
 ## 📄 License
 
-MIT — see [`OSS_AND_SAAS_STRATEGY.md`](./OSS_AND_SAAS_STRATEGY.md) for why, and for how Porter stays a genuinely open, single-tenant self-hosted project even if a hosted product exists someday.
+MIT — see `BUILD.md` for why, and for how Porter stays a genuinely open, single-tenant self-hosted project even if a hosted product exists someday.

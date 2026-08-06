@@ -69,6 +69,16 @@ func NewStore(path string) *Store {
 	return &Store{db: db, traffic: map[string][]*types.TrafficEntry{}, logs: map[string][]string{}}
 }
 
+// Close releases the underlying SQLite handle. The server process never
+// calls this (the DB lives for the process lifetime); tests use it so a
+// temp DB can be removed cleanly on Windows without a file-lock error.
+func (s *Store) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
+	return nil
+}
+
 // NewID returns a short random hex ID for a VM or project.
 func NewID() string {
 	b := make([]byte, 8)

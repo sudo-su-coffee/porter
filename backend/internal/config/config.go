@@ -35,6 +35,7 @@ func LoadConfig(path string) (*Config, error) {
 		ListenAddr:     ":8080",
 		StateFile:      "porter.db",
 		FirecrackerBin: "firecracker",
+		ImagesDir:      "vms/images",
 		AdminUsername:  "admin",
 	}
 
@@ -52,6 +53,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.KernelImage = tomlGet(sections, "firecracker", "kernel_image", cfg.KernelImage)
 		cfg.RootfsPath = tomlGet(sections, "firecracker", "rootfs_path", cfg.RootfsPath)
 		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
+		cfg.ImagesDir = tomlGet(sections, "firecracker", "images_dir", cfg.ImagesDir)
 		cfg.AdminUsername = tomlGet(sections, "admin", "username", cfg.AdminUsername)
 		cfg.AdminPassword = tomlGet(sections, "admin", "password", cfg.AdminPassword)
 	case os.IsNotExist(err):
@@ -69,6 +71,7 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.KernelImage = envOr("PORTER_KERNEL_IMAGE", cfg.KernelImage)
 	cfg.RootfsPath = envOr("PORTER_ROOTFS_PATH", cfg.RootfsPath)
 	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
+	cfg.ImagesDir = envOr("PORTER_IMAGES_DIR", cfg.ImagesDir)
 	cfg.AdminUsername = envOr("PORTER_ADMIN_USERNAME", cfg.AdminUsername)
 	cfg.AdminPassword = envOr("PORTER_ADMIN_PASSWORD", cfg.AdminPassword)
 

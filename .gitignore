@@ -28,6 +28,13 @@ backend/web/dist/*.html
 frontend/node_modules/
 frontend/.vite/
 
+# Firecracker/VM runtime artifacts (reproducible, not source)
+vms/rootfs.ext4
+vms/vmlinux
+
+# Release archives
+porter.zip
+
 # OS/editor cruft
 .DS_Store
 *.swp

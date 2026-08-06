@@ -1,26 +1,33 @@
 // Package command implements the Porter CLI entrypoints: `server`,
 // `worker`, `version`, and `help`. It follows the pattern of a single
-// binary with subcommands, wiring up the config -> store -> event hub ->
-// VM manager -> API dependency chain in one place.
+// binary with subcommands: main dispatches on os.Args[1], each subcommand
+// parses its own flags, and the server runs an HTTP listener that shuts
+// down gracefully on SIGINT/SIGTERM.
 package command
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"porter/assets"
+	"porter" // package assets — the embedded web/dist lives at the module root
 	"porter/internal/api"
 	"porter/internal/config"
 	"porter/internal/event"
+	"porter/internal/imagecatalog"
 	netmgr "porter/internal/net"
 	"porter/internal/runtime"
-	stores "porter/internal/store"
+	"porter/internal/store"
 )
 
-// Run dispatches on the first non-flag argument and executes the matching
+// Run dispatches on the first argument and executes the matching
 // subcommand. It returns a process exit code.
 func Run(args []string, version string) int {
 	if len(args) < 1 {
@@ -66,17 +73,23 @@ Worker options:
   -workers int      Number of workers to run (default 1)
 
 Examples:
-  porter server
-  porter server -workers 0
-  porter worker -workers 2
+  porter server                  # API + 1 embedded worker
+  porter server -workers 0       # API only (no workers)
+  porter server -workers 4       # API + 4 embedded workers
+  porter worker -workers 4       # 4 workers only (no API)
 `)
 }
 
-// runServer starts the control-plane API, embedding the built dashboard
-// and optionally running in-process lifecycle workers.
+// runServer starts the control-plane Gateway, embedding the built
+// dashboard and optionally running in-process lifecycle workers. It
+// serves until SIGINT/SIGTERM, then tears down gracefully.
 func runServer(args []string, version string) int {
-	cfgPath := getenv("PORTER_CONFIG", "porter.toml")
-	cfg, err := config.LoadConfig(cfgPath)
+	flags := flag.NewFlagSet("server", flag.ExitOnError)
+	configPath := flags.String("config", getenv("PORTER_CONFIG", "porter.toml"), "Config file path")
+	numWorkers := flags.Int("workers", 1, "Number of embedded lifecycle workers (0 to disable)")
+	_ = flags.Parse(args)
+
+	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("config error: %v", err)
 	}
@@ -95,29 +108,73 @@ func runServer(args []string, version string) int {
 	defer vmm.Close()
 
 	netMgr := netmgr.NewNetManager()
-	a := api.NewAPI(st, hub, vmm, netMgr, cfg.APIToken, cfg.BaseDomain, cfg.AdminUsername, cfg.AdminPassword, version)
+	catalog := imagecatalog.New(cfg.ImagesDir)
+	a := api.NewAPI(st, hub, vmm, netMgr, catalog, cfg.APIToken, cfg.BaseDomain, cfg.AdminUsername, cfg.AdminPassword, version)
 
 	mux := http.NewServeMux()
 	a.Routes(mux)
-
-	sub, err := fs.Sub(assets.Dist, "web/dist")
-	if err == nil {
+	if sub, err := fs.Sub(assets.Dist, "web/dist"); err == nil {
 		mux.Handle("/", http.FileServer(http.FS(sub)))
+	}
+
+	server := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 15 * time.Second,
 	}
 
 	log.Printf("Porter %s — Control API listening on %s", version, cfg.ListenAddr)
 	log.Printf("Dashboard: http://localhost%s", cfg.ListenAddr)
-	log.Printf("State: %s (sqlite)  Config: %s", cfg.StateFile, cfgPath)
-	log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
+	log.Printf("State: %s (sqlite)  Config: %s", cfg.StateFile, *configPath)
+	log.Printf("Embedded workers: %d", *numWorkers)
+
+	// Graceful shutdown on SIGINT/SIGTERM: stop workers first, then the HTTP
+	// server, then the process-owned side effects (VM manager, store).
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	case sig := <-shutdown:
+		log.Printf("Received %s, shutting down...", sig)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("server shutdown error: %v", err)
+	}
+	log.Printf("Shutdown complete")
 	return 0
 }
 
-// runWorker runs background lifecycle jobs with no HTTP server. For v0.1.0
-// this is a thin placeholder; the actual worker jobs (pending-boot queue,
-// healthcheck sweep) are populated as part of the firecracker-containerd
-// VM manager work.
+// runWorker runs background lifecycle jobs with no HTTP server. For
+// v0.1.0 the worker side is a placeholder; the pending-boot queue and
+// healthcheck sweep are populated alongside the containerd VM manager.
 func runWorker(args []string, version string) int {
-	log.Printf("Porter worker %s — no background jobs registered yet", version)
+	flags := flag.NewFlagSet("worker", flag.ExitOnError)
+	configPath := flags.String("config", getenv("PORTER_CONFIG", "porter.toml"), "Config file path")
+	workerCount := flags.Int("workers", 1, "Number of workers to run")
+	_ = flags.Parse(args)
+
+	if _, err := config.LoadConfig(*configPath); err != nil {
+		log.Fatalf("config error: %v", err)
+	}
+	log.Printf("Porter worker %s — %d worker(s), no background jobs registered yet", version, *workerCount)
+
+	// Keep running until signalled to stop.
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+	<-shutdown
+	log.Printf("Worker shutting down")
 	return 0
 }
 

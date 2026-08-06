@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -326,7 +327,7 @@ func probeHealth(vm *types.VM, hc *types.Healthcheck) bool {
 		return false
 	}
 	c := &net.Dialer{Timeout: 2 * time.Second}
-	conn, err := c.Dial("tcp", fmt.Sprintf("%s:%d", vm.IPAddress, hc.Port))
+	conn, err := c.Dial("tcp", net.JoinHostPort(vm.IPAddress, strconv.Itoa(hc.Port)))
 	if err != nil {
 		return false
 	}

@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"porter/internal/compose"
 	"porter/internal/event"
+	"porter/internal/imagecatalog"
 	netmgr "porter/internal/net"
 	"porter/internal/runtime"
 	"porter/internal/store"
@@ -24,9 +26,11 @@ type API struct {
 	hub        *event.Hub
 	vmm        *runtime.VMManager
 	net        *netmgr.NetManager
+	catalog    *imagecatalog.Catalog
 	token      string
 	baseDomain string
 	version    string
+	startedAt  time.Time
 
 	// Single prototype admin account (from porter.toml [admin], no user
 	// database). /login checks these and, on success, hands back the same
@@ -35,10 +39,12 @@ type API struct {
 	adminPass string
 }
 
-func NewAPI(store *store.Store, hub *event.Hub, vmm *runtime.VMManager, net *netmgr.NetManager, token, baseDomain, adminUser, adminPass, version string) *API {
+func NewAPI(store *store.Store, hub *event.Hub, vmm *runtime.VMManager, net *netmgr.NetManager, catalog *imagecatalog.Catalog, token, baseDomain, adminUser, adminPass, version string) *API {
 	return &API{
-		store: store, hub: hub, vmm: vmm, net: net, token: token, baseDomain: baseDomain,
+		store: store, hub: hub, vmm: vmm, net: net, catalog: catalog,
+		token: token, baseDomain: baseDomain,
 		adminUser: adminUser, adminPass: adminPass, version: version,
+		startedAt: time.Now().UTC(),
 	}
 }
 

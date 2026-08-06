@@ -49,25 +49,22 @@ type VMManager struct {
 	vms map[string]*runningVM
 }
 
-func NewVMManager(cfg FCConfig, store *store.Store, hub *event.Hub) (*VMManager, error) {
-	if cfg.KernelImagePath == "" {
-		return nil, fmt.Errorf("PORTER_KERNEL_IMAGE must be set (path to a vmlinux built for Firecracker guest boot)")
-	}
-	if _, err := os.Stat(cfg.KernelImagePath); err != nil {
-		return nil, fmt.Errorf("PORTER_KERNEL_IMAGE %q: %w", cfg.KernelImagePath, err)
-	}
+// NewVMManager builds a VM manager. Unlike the old code this does NOT
+// require a kernel/rootfs/firecracker binary to exist at startup — the
+// server must be able to come up and show the dashboard even before the
+// host is provisioned. Those prerequisites are validated lazily inside
+// Boot(), per-VM, with a clear message, so a fresh box can start Porter
+// and just has "no kernel" reported when actually deploying a VM.
+func NewVMManager(cfg FCConfig, store *store.Store, hub *event.Hub) *VMManager {
 	if cfg.FirecrackerBin == "" {
 		cfg.FirecrackerBin = "firecracker"
-	}
-	if _, err := exec.LookPath(cfg.FirecrackerBin); err != nil {
-		return nil, fmt.Errorf("firecracker binary %q not found in PATH: %w", cfg.FirecrackerBin, err)
 	}
 	return &VMManager{
 		cfg:   cfg,
 		store: store,
 		hub:   hub,
 		vms:   make(map[string]*runningVM),
-	}, nil
+	}
 }
 
 // Close force-stops every VM still tracked in memory. Called once, on
@@ -87,6 +84,21 @@ func (m *VMManager) Close() {
 func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 	m.setState(vm, types.StateBooting, "")
 	go func() {
+		// Host prerequisites are validated at boot time, not at server
+		// startup, so `porter server` can come up on a fresh box.
+		if m.cfg.KernelImagePath == "" {
+			m.setState(vm, types.StateFailed, `no kernel image configured — run "porter kernel set <path|URL>" or set PORTER_KERNEL_IMAGE`)
+			return
+		}
+		if _, err := os.Stat(m.cfg.KernelImagePath); err != nil {
+			m.setState(vm, types.StateFailed, fmt.Sprintf("kernel image not found: %v (run `porter kernel set`)", err))
+			return
+		}
+		if _, err := exec.LookPath(m.cfg.FirecrackerBin); err != nil {
+			m.setState(vm, types.StateFailed, fmt.Sprintf("firecracker binary %q not found in PATH: %v", m.cfg.FirecrackerBin, err))
+			return
+		}
+
 		rootfs := vm.RootfsPath
 		if rootfs == "" {
 			rootfs = m.cfg.RootfsPath

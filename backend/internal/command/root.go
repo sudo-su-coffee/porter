@@ -111,14 +111,11 @@ func runServer(args []string, version string) int {
 	st := store.NewStore(cfg.StateFile)
 	hub := event.NewHub()
 
-	vmm, err := runtime.NewVMManager(runtime.FCConfig{
+	vmm := runtime.NewVMManager(runtime.FCConfig{
 		KernelImagePath: cfg.KernelImage,
 		RootfsPath:      cfg.RootfsPath,
 		FirecrackerBin:  cfg.FirecrackerBin,
 	}, st, hub)
-	if err != nil {
-		log.Fatalf("failed to initialize VM manager: %v", err)
-	}
 	defer vmm.Close()
 
 	netMgr := netmgr.NewNetManager()

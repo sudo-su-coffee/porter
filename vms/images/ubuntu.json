@@ -1,0 +1,13 @@
+{
+  "id": "ubuntu",
+  "name": "Ubuntu 24.04",
+  "type": "microvm",
+  "description": "Ubuntu LTS MicroVM. Full userspace environment for general-purpose workloads and development.",
+  "image": "ubuntu:24.04",
+  "vcpus": 2,
+  "mem_mib": 512,
+  "ports": [],
+  "env": {},
+  "tags": ["linux", "ubuntu", "general"],
+  "logo": "🟠"
+}

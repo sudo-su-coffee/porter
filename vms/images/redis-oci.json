@@ -1,0 +1,13 @@
+{
+  "id": "redis",
+  "name": "Redis",
+  "type": "microvm",
+  "description": "In-memory data store for caching, pub/sub, and queues. OCI image booted as an isolated Firecracker MicroVM.",
+  "image": "redis:7-alpine",
+  "vcpus": 1,
+  "mem_mib": 256,
+  "ports": [{ "container_port": 6379, "protocol": "tcp" }],
+  "env": {},
+  "tags": ["cache", "database", "redis"],
+  "logo": "⚡"
+}

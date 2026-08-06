@@ -1,0 +1,110 @@
+name: Release
+
+# Porter is Firecracker/KVM-based, so only Linux targets make sense —
+# there is no macOS/Windows build here on purpose.
+#
+# Triggers on any tag matching v0.1.0, v0.1.0-beta, v1.0.0, etc.
+# Push a tag to cut a release:
+#   git tag v0.1.0-beta
+#   git push origin v0.1.0-beta
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (Vue dashboard)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+
+      - name: Derive version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        working-directory: backend
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" \
+            -o dist/porter-linux-${{ matrix.goarch }} \
+            .
+
+      - name: Checksum
+        working-directory: backend/dist
+        run: sha256sum porter-linux-${{ matrix.goarch }} > porter-linux-${{ matrix.goarch }}.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: porter-linux-${{ matrix.goarch }}
+          path: |
+            backend/dist/porter-linux-${{ matrix.goarch }}
+            backend/dist/porter-linux-${{ matrix.goarch }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List staged release files
+        run: ls -lh artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Porter ${{ github.ref_name }}
+          # Marks the release as a pre-release automatically for any
+          # tag containing a pre-release suffix (e.g. v0.1.0-beta,
+          # v0.2.0-rc1). Stable tags like v1.0.0 publish as a normal
+          # release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/porter-linux-amd64
+            artifacts/porter-linux-amd64.sha256
+            artifacts/porter-linux-arm64
+            artifacts/porter-linux-arm64.sha256

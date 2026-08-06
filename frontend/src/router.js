@@ -1,0 +1,29 @@
+import { createRouter, createWebHashHistory } from "vue-router";
+import { getToken } from "./api/client";
+
+import DeploymentsList from "./views/DeploymentsList.vue";
+import ProjectDetail from "./views/ProjectDetail.vue";
+import VmDetail from "./views/VmDetail.vue";
+import Login from "./views/Login.vue";
+
+const routes = [
+  { path: "/", name: "list", component: DeploymentsList },
+  { path: "/projects/:id", name: "project", component: ProjectDetail, props: true },
+  { path: "/vms/:id", name: "vm", component: VmDetail, props: true },
+  { path: "/login", name: "login", component: Login },
+];
+
+const router = createRouter({
+  // Hash history keeps this a static-file-friendly single binary with
+  // no server-side route handling required beyond serving index.html.
+  history: createWebHashHistory(),
+  routes,
+});
+
+router.beforeEach((to) => {
+  if (to.name !== "login" && !getToken()) {
+    return { name: "login" };
+  }
+});
+
+export default router;

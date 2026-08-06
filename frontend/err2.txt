@@ -1,4 +1,0 @@
-pattern ./...: directory prefix . does not contain main module or its selected dependencies
-go: cannot find main module, but found .git/config in D:\github\porter-main
-	to create a module there, run:
-	cd .. && go mod init

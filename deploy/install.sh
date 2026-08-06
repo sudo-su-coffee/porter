@@ -200,25 +200,32 @@ ok "containerd restarted"
 c "8/9  Install Porter binary + config"
 
 install_porter_binary() {
-  # 1) explicit path
+  local REPO=${PORTER_REPO:?set PORTER_REPO=owner/name (e.g. acme/porter)}
+  local ARCH=${PORTER_ARCH:-$(uname -m)}
+  local ASSET=porter-linux-amd64
+  case "$ARCH" in
+    aarch64|arm64) ASSET=porter-linux-arm64 ;;
+  esac
+
+  # 1) explicit path override
   if [ -n "${PORTER_BIN:-}" ] && [ -f "$PORTER_BIN" ]; then
     install -m 0755 "$PORTER_BIN" /usr/local/bin/porter
     return 0
   fi
-  # 2) latest STABLE release binary from GitHub Releases (amd64)
-  local LATEST_URL="https://github.com/${PORTER_REPO:-porter/porter}/releases/latest/download/${PORTER_BIN_NAME:-porter-linux-amd64}"
-  if [ "${PORTER_BIN_NAME:-}" != "build" ]; then
-    warn "trying to download latest release: $LATEST_URL"
-    if curl -fSL "$LATEST_URL" -o /usr/local/bin/porter 2>/dev/null; then
-      chmod 0755 /usr/local/bin/porter
-      return 0
-    fi
-    warn "download failed — falling back to building from source."
-  fi
-  # 3) build from source (needs Go 1.25 + Node for the embedded dashboard)
-  local SRC=${PORTER_SRC:-..}
-  (cd "$SRC/backend" && go build -trimpath -ldflags "-s -w" -o /usr/local/bin/porter ./cmd/porter)
-  [ -x /usr/local/bin/porter ] || die "could not obtain a porter binary"
+
+  # 2) Resolve the LATEST STABLE release version from the GitHub API, then
+  #    download that exact binary. No build-from-source branch — the release
+  #    binary is the source of truth.
+  local LATEST
+  LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+             | grep '"tag_name"' | head -1 | cut -d'"' -f4) \
+    || die "could not resolve the latest Porter release for $REPO"
+  [ -n "$LATEST" ] || die "no stable release found for $REPO"
+
+  local URL="https://github.com/$REPO/releases/download/$LATEST/$ASSET"
+  ok "downloading $REPO $LATEST ($ASSET) -> /usr/local/bin/porter"
+  curl -fSL "$URL" -o /usr/local/bin/porter || die "download failed: $URL"
+  chmod 0755 /usr/local/bin/porter
 }
 
 install_porter_binary

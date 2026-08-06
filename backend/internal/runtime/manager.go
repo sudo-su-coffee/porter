@@ -35,6 +35,7 @@ type FCConfig struct {
 	Snapshotter      string // snapshotter to pull/unpack into (devmapper on a real host)
 	Namespace        string // containerd namespace, e.g. "porter"
 	LogsDir          string // where per-VM stdio logs land (e.g. /var/log/porter)
+	Simulate         bool   // fake the lifecycle (pending->running) for dev/demo, no containerd needed
 }
 
 // runningVM tracks the live containerd handles for one booted VM.
@@ -88,6 +89,10 @@ func (m *VMManager) Close() {
 func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 	m.setState(vm, types.StateBooting, "")
 	go func() {
+		if m.cfg.Simulate {
+			m.simulateBoot(vm, spec)
+			return
+		}
 		// Host prerequisites are validated at boot time, not at server
 		// startup, so `porter server` can come up on a fresh box.
 		if m.cfg.ContainerdSocket == "" {
@@ -95,7 +100,7 @@ func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 			return
 		}
 		if _, err := os.Stat(m.cfg.ContainerdSocket); err != nil {
-			m.setState(vm, types.StateFailed, fmt.Sprintf("containerd socket not found at %s: %v — is containerd running? (see deploy/host/01-containerd.sh)", m.cfg.ContainerdSocket, err))
+			m.setState(vm, types.StateFailed, fmt.Sprintf("containerd socket not found at %s: %v — is containerd running? (run `deploy/install.sh` on the host, or set simulate = true in porter.toml for a dev/demo run)", m.cfg.ContainerdSocket, err))
 			return
 		}
 		if vm.Image == "" {
@@ -232,6 +237,23 @@ func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 }
 
 // envSlice renders a map of env vars as the []string the OCI spec wants.
+// simulateBoot fakes a VM lifecycle (pending->booting->running) with no
+// containerd, so the API + dashboard are fully explorable on a box without
+// the runtime. Controlled by [firecracker] simulate = true / PORTER_SIMULATE.
+// No live handle is stored, so Stop() simply flips state to stopped.
+func (m *VMManager) simulateBoot(vm *types.VM, spec netmgr.BootSpec) {
+	time.Sleep(1200 * time.Millisecond)
+	if ip, _, err := net.ParseCIDR(spec.CIDR); err == nil {
+		vm.IPAddress = ip.String()
+	}
+	now := time.Now().UTC()
+	vm.StartedAt = &now
+	vm.ContainerID = "sim-" + vm.ID
+	vm.TaskID = "sim-" + vm.ID
+	m.setState(vm, types.StateRunning, "")
+	m.setHealth(vm, types.HealthHealthy)
+}
+
 func envSlice(env map[string]string) []string {
 	if len(env) == 0 {
 		return nil

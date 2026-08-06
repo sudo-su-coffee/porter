@@ -86,21 +86,49 @@ if command -v yum >/dev/null 2>&1; then PKG=yum; fi
 ok "package manager: $PKG"
 
 # ----------------------------------------------------------------------------
-c "3/9  Install base packages (containerd, firecracker, networking)"
+c "3/9  Install base packages (containerd, iptables, curl, jq)"
+# Install the packages that exist; firecracker often isn't in distro repos
+# (e.g. Kali), so we install it separately and then fall back to a GitHub
+# release download below.
 case "$PKG" in
   apt)
     apt-get update -y
-    apt-get install -y containerd firecracker iptables curl jq systemd-coredump 2>/dev/null || \
-      apt-get install -y containerd firecracker iptables curl jq || true
+    apt-get install -y containerd iptables curl jq || true
+    apt-get install -y firecracker 2>/dev/null || true
     ;;
   dnf|yum)
-    (command -v containerd >/dev/null 2>&1 || "$PKG" install -y containerd.io 2>/dev/null || true)
-    "$PKG" install -y firecracker iptables curl jq 2>/dev/null || \
-      warn "firecracker not in repos; install manually"
+    "$PKG" install -y containerd.io iptables curl jq 2>/dev/null || \
+      "$PKG" install -y containerd iptables curl jq || true
+    "$PKG" install -y firecracker 2>/dev/null || true
     ;;
 esac
 command -v containerd >/dev/null 2>&1 || die "containerd install failed"
-ok "containerd + firecracker + iptables"
+ok "containerd + iptables + curl + jq"
+
+# Firecracker VMM + jailer: use the distro package if present, else download
+# the stable release binaries from the Firecracker GitHub releases. The
+# aws.firecracker shim needs BOTH firecracker and jailer in PATH.
+ensure_firecracker() {
+  command -v firecracker >/dev/null 2>&1 && return 0
+  local FC_VER="${FIRECRACKER_VERSION:-1.8.0}"
+  local ARCH
+  case "$(uname -m)" in x86_64) ARCH=x86_64;; aarch64|arm64) ARCH=aarch64;; *) die "unsupported arch $(uname -m)";; esac
+  local URL="https://github.com/firecracker-microvm/firecracker/releases/download/v${FC_VER}/firecracker-v${FC_VER}-${ARCH}.tgz"
+  warn "downloading firecracker v${FC_VER} from GitHub: $URL"
+  curl -fsSL "$URL" -o /tmp/fc.tgz || die "could not download firecracker ($URL)"
+  rm -rf /tmp/fc-extract && mkdir -p /tmp/fc-extract
+  tar -xzf /tmp/fc.tgz -C /tmp/fc-extract
+  FC_BIN=$(find "$(find /tmp/fc-extract -type d -name 'release-v*' | head -1)" -type f -name 'firecracker-*' 2>/dev/null | head -1)
+  JAIL_BIN=$(find "$(find /tmp/fc-extract -type d -name 'release-v*' | head -1)" -type f -name 'jailer-*' 2>/dev/null | head -1)
+  [ -n "$FC_BIN" ] && [ -f "$FC_BIN" ] || die "firecracker binary not found in tarball"
+  install -m 0755 "$FC_BIN" /usr/local/bin/firecracker
+  if [ -n "$JAIL_BIN" ] && [ -f "$JAIL_BIN" ]; then
+    install -m 0755 "$JAIL_BIN" /usr/local/bin/jailer
+    ok "jailer -> /usr/local/bin/jailer"
+  fi
+}
+ensure_firecracker
+ok "firecracker -> /usr/local/bin/firecracker ($(firecracker --version 2>&1 | head -1))"
 
 # ----------------------------------------------------------------------------
 c "4/9  Create porter directories"

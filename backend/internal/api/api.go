@@ -113,6 +113,7 @@ func (a *API) auth(h http.HandlerFunc) http.Handler {
 }
 
 func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": a.version})
 }
 

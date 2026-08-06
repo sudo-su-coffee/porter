@@ -24,6 +24,7 @@ type Config struct {
 	Snapshotter      string // containerd snapshotter to pull/unpack into (devmapper on a real host)
 	Namespace        string // containerd namespace, e.g. "porter"
 	LogsDir          string // where per-VM stdio logs land, e.g. /var/log/porter
+	Simulate         bool   // fake the lifecycle for dev/demo (no containerd needed)
 
 	// Kernel/rootfs/firecracker are consumed by the host (the shim's
 	// /etc/containerd/firecracker-runtime.json), not by Porter at runtime;
@@ -73,6 +74,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Snapshotter = tomlGet(sections, "firecracker", "snapshotter", cfg.Snapshotter)
 		cfg.Namespace = tomlGet(sections, "firecracker", "namespace", cfg.Namespace)
 		cfg.LogsDir = tomlGet(sections, "firecracker", "logs_dir", cfg.LogsDir)
+		cfg.Simulate = tomlBool(sections, "firecracker", "simulate", cfg.Simulate)
 		cfg.ImagesDir = tomlGet(sections, "firecracker", "images_dir", cfg.ImagesDir)
 		cfg.AdminUsername = tomlGet(sections, "admin", "username", cfg.AdminUsername)
 		cfg.AdminPassword = tomlGet(sections, "admin", "password", cfg.AdminPassword)
@@ -91,6 +93,8 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.KernelImage = envOr("PORTER_KERNEL_IMAGE", cfg.KernelImage)
 	cfg.RootfsPath = envOr("PORTER_ROOTFS_PATH", cfg.RootfsPath)
 	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
+	cfg.LogsDir = envOr("PORTER_LOGS_DIR", cfg.LogsDir)
+	cfg.Simulate = envBool("PORTER_SIMULATE", cfg.Simulate)
 	cfg.ImagesDir = envOr("PORTER_IMAGES_DIR", cfg.ImagesDir)
 	cfg.AdminUsername = envOr("PORTER_ADMIN_USERNAME", cfg.AdminUsername)
 	cfg.AdminPassword = envOr("PORTER_ADMIN_PASSWORD", cfg.AdminPassword)
@@ -107,6 +111,32 @@ func LoadConfig(path string) (*Config, error) {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+// envBool parses a PORTER_* boolean (true/1/yes) with a default.
+func envBool(key string, def bool) bool {
+	switch os.Getenv(key) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	}
+	return def
+}
+
+// tomlBool reads a [section] key as a boolean with a default.
+func tomlBool(sections map[string]map[string]string, section, key string, def bool) bool {
+	v := tomlGet(sections, section, key, "")
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
 	}
 	return def
 }

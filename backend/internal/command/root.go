@@ -118,6 +118,7 @@ func runServer(args []string, version string) int {
 		Snapshotter:      cfg.Snapshotter,
 		Namespace:        cfg.Namespace,
 		LogsDir:          cfg.LogsDir,
+		Simulate:         cfg.Simulate,
 	}, st, hub)
 	defer vmm.Close()
 
@@ -191,6 +192,7 @@ func runWorker(args []string, version string) int {
 		Snapshotter:      cfg.Snapshotter,
 		Namespace:        cfg.Namespace,
 		LogsDir:          cfg.LogsDir,
+		Simulate:         cfg.Simulate,
 	}, st, hub)
 	defer vmm.Close()
 

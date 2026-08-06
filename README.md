@@ -297,6 +297,18 @@ Create + boot a single VM from an image.
 ### Traffic
 `GET /vms/{id}/traffic?limit=200` — most recent ring entries (metadata only).
 
+### Volumes & port mapping (v0.1.0 fold-in)
+
+Fold-ins from the Phase 6 (Networking) / Phase 7 (Storage) workstreams:
+
+- **Port mapping** — a VM's `ports` may now carry an optional `host_port`
+  (defaults to `container_port`), mapping **host → guest** so the service is
+  reachable on the host: `{"container_port": 6379, "host_port": 16379, "protocol": "tcp"}`.
+- **Volumes** — a scaffolded `/volumes` API for persistent storage:
+  `POST /volumes { "name": "db", "size_mib": 2048 }` creates one, `GET /volumes`
+  lists, `DELETE /volumes/{id}` removes; attach a volume by name on `POST /vms`
+  and it is mounted before the microVM boots.
+
 ### Events (SSE)
 `GET /events` → server stream: `vm.state`, `project.progress`, `traffic.request`, `domain.status`, `replica.health`, `pool.updated`.
 

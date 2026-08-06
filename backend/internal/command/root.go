@@ -9,11 +9,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +42,8 @@ func Run(args []string, version string) int {
 		return runServer(args[1:], version)
 	case "worker":
 		return runWorker(args[1:], version)
+	case "kernel":
+		return runKernel(args[1:], version)
 	case "version":
 		fmt.Printf("Porter %s\n", version)
 		return 0
@@ -61,8 +66,17 @@ Usage:
 Commands:
   server    Start the API server (with optional embedded lifecycle workers)
   worker    Run lifecycle workers only (no HTTP server)
+  kernel    Set the shared vmlinux kernel (local path or https:// URL)
   version   Print the version
   help      Show this help
+
+Kernel options:
+  -dest string   Destination file (default vms/vmlinux, or $PORTER_KERNEL_IMAGE)
+
+Examples:
+  porter kernel set ./vmlinux-5.10
+  porter kernel set https://example.com/vmlinux
+
 
 Server options:
   -config string    Config file path (default "porter.toml", or $PORTER_CONFIG)
@@ -176,6 +190,79 @@ func runWorker(args []string, version string) int {
 	<-shutdown
 	log.Printf("Worker shutting down")
 	return 0
+}
+
+// runKernel provisions the shared Firecracker kernel (vmlinux) from
+// either a local file path or a remote https:// URL. `porter kernel set
+// ./vmlinux-5.10` copies a local file; `porter kernel set
+// https://…/vmlinux` downloads it. The destination defaults to
+// vms/vmlinux (override with -dest or PORTER_KERNEL_IMAGE).
+func runKernel(args []string, version string) int {
+	sub := flag.NewFlagSet("kernel", flag.ExitOnError)
+	dest := sub.String("dest", getenv("PORTER_KERNEL_IMAGE", "vms/vmlinux"), "Destination file to write to")
+	_ = sub.Parse(args)
+	rest := sub.Args()
+	if len(rest) < 2 || rest[0] != "set" {
+		fmt.Println("usage: porter kernel set <local-path|https://url> [-dest file]")
+		return 1
+	}
+	src := rest[1]
+
+	if err := os.MkdirAll(filepath.Dir(*dest), 0o755); err != nil {
+		log.Fatalf("kernel: mkdir %s: %v", filepath.Dir(*dest), err)
+	}
+
+	switch {
+	case strings.HasPrefix(src, "https://"), strings.HasPrefix(src, "http://"):
+		log.Printf("kernel: downloading %s -> %s", src, *dest)
+		if err := downloadFile(*dest, src); err != nil {
+			log.Fatalf("kernel: download: %v", err)
+		}
+	default:
+		log.Printf("kernel: copying %s -> %s", src, *dest)
+		if err := copyFile(*dest, src); err != nil {
+			log.Fatalf("kernel: copy: %v", err)
+		}
+	}
+
+	fmt.Printf("Porter kernel set -> %s\n", *dest)
+	fmt.Printf("Point [firecracker] kernel_image at it (or set PORTER_KERNEL_IMAGE) and start `porter server`.\n")
+	return 0
+}
+
+// downloadFile streams a URL to dst.
+func downloadFile(dst, url string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("GET %s: %s", url, resp.Status)
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// copyFile copies src to dst.
+func copyFile(dst, src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func getenv(key, def string) string {

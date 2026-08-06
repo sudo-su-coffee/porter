@@ -112,9 +112,10 @@ func runServer(args []string, version string) int {
 	hub := event.NewHub()
 
 	vmm := runtime.NewVMManager(runtime.FCConfig{
-		KernelImagePath: cfg.KernelImage,
-		RootfsPath:      cfg.RootfsPath,
-		FirecrackerBin:  cfg.FirecrackerBin,
+		ContainerdSocket: cfg.ContainerdSocket,
+		Snapshotter:      cfg.Snapshotter,
+		Namespace:        cfg.Namespace,
+		LogsDir:          cfg.LogsDir,
 	}, st, hub)
 	defer vmm.Close()
 

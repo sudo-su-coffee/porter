@@ -1,15 +1,62 @@
 # Porter Roadmap
 
-* **Phase 1:** Build the Foundation (v0.1.0 → v0.10.0)
-* **Phase 2:** Production Release (v1.0.0)
-* **Phase 3:** Cloud Platform (v1.1.x+)
+Porter is a self-hosted PaaS (Vercel/Fly.io-style) for Firecracker microVMs. This
+roadmap is ordered toward a single destination: **v1.0.0, the stable release.**
+The `0.x` series is the foundation — each version layers on the last until the
+feature set freezes and ships as **v1.0.0**. After that, `1.1.x` becomes the
+cloud platform.
 
+```
+v0.1.0 … v0.10.0-rc1  →  v1.0.0 (The Release)  →  v1.1.x+ (Cloud Platform)
+```
 
-## Phase I — Foundation (v0.x)
+---
 
-The goal of the 0.x series is to transform Porter from a Firecracker wrapper into a complete MicroVM application platform.
+# v1.0.0 — The Stable Release
 
-At the end of this phase, Porter should allow users to deploy applications from Docker images, Docker Compose files, Git repositories, or reusable MicroVM images through a modern web interface.
+## Theme
+
+**Production-ready.** Everything advertised in the 0.x series works, the API and
+deployment model are stable, and it is safe to build real workloads on Porter.
+
+## Complete Features
+
+**Deploy from**
+- OCI Image
+- Docker Compose
+- Git Repository (auto-build)
+- Golden MicroVM Image
+
+**Manage**
+- Projects
+- Services
+- MicroVMs
+- Domains
+- Volumes
+- Networks
+- Secrets
+
+**Observe**
+- Logs
+- Metrics
+- Traffic
+- Events
+
+**Operate**
+- Browser Console
+- Optional SSH
+- REST API
+- CLI
+- Dashboard
+
+**Developer Experience**
+- One-click deployment
+- Templates
+- Image library
+- Build pipeline
+- Automatic TLS
+
+The API and deployment model are considered stable at this version.
 
 ---
 
@@ -17,69 +64,69 @@ At the end of this phase, Porter should allow users to deploy applications from 
 
 ## Theme
 
-**Core Runtime & First Deployment**
-
-## Objectives
-
-Deliver the first public preview capable of launching production-grade Firecracker MicroVMs from OCI images.
+**Core Runtime & First Deployment** — the first public preview that launches
+production-grade Firecracker microVMs from OCI images. This is the foundation
+every later version builds on.
 
 ## Runtime
 
-* Firecracker integration
-* firecracker-containerd integration
-* VM lifecycle management
-* Boot Linux kernels
-* RootFS support
-* OCI image support
-* Snapshot support (basic)
+- Firecracker integration
+- firecracker-containerd integration (`aws.firecracker` shim)
+- VM lifecycle management (create / stop / restart / delete)
+- Boot Linux kernels (shared `vmlinux`, provisioned with `porter kernel set`)
+- RootFS support
+- OCI **and Docker** image support (the in-VM agent unpacks any OCI rootfs)
+- Snapshot support (basic, devmapper)
+- Per-project private subnets + static IP allocation
 
 ## Deployments
 
-* Deploy Docker image
-* Deploy OCI image
-* Deploy Docker Compose
-* Deploy MicroVM image
+- Deploy Docker image
+- Deploy OCI image
+- Deploy Docker Compose (**the canonical input** — a `compose.yml` referencing
+  images is parsed into one microVM per service)
+- Deploy MicroVM image (image catalog)
 
 ## Dashboard
 
-* Login
-* Dashboard
-* Project list
-* VM list
-* Deployment history
-* Server overview
+- Login
+- Dashboard
+- Project list
+- VM list
+- Deployment history
+- Server overview
 
 ## VM Management
 
-* Create VM
-* Stop VM
-* Restart VM
-* Delete VM
-* Console
-* Browser terminal
+- Create VM
+- Stop VM
+- Restart VM
+- Delete VM
 
 SSH remains disabled by default.
 
 ## Logs
 
-* VM logs
-* Application logs
+- VM logs (live ring + file tail)
+- Application logs
 
 ## Networking
 
-* Private bridge
-* Static IP
-* Port mapping
+- Private bridge
+- Static IP
+- Port mapping
 
 ## Storage
 
-* RootFS
-* Volume mount
+- RootFS
 
 ## API
 
-* REST API
-* CLI
+- REST API
+
+> **GitHub / GitLab auto-build** is deliberately deferred to **v0.2.0** (builds,
+> build cache, and a build pipeline belong to the Developer-Experience release).
+> v0.1.0 is OCI-native: you bring an image, Porter runs it.
 
 ---
 
@@ -87,30 +134,28 @@ SSH remains disabled by default.
 
 ## Theme
 
-**Developer Experience**
-
-Everything should become easier.
+**Developer Experience** — everything becomes easier.
 
 ### New Features
 
-* GitHub deployment
-* GitLab deployment
-* Gitea deployment
-* Forgejo deployment
-* Automatic builds
-* Dockerfile builds
-* Build cache
-* Environment variables
-* Secrets
-* Configuration management
+- GitHub deployment
+- GitLab deployment
+- Gitea deployment
+- Forgejo deployment
+- Automatic builds
+- Dockerfile builds
+- Build cache
+- Environment variables
+- Secrets
+- Configuration management
 
 ### UI
 
-* Better dashboard
-* Live deployment progress
-* Build logs
-* Search
-* Filtering
+- Better dashboard
+- Live deployment progress
+- Build logs
+- Search
+- Filtering
 
 ---
 
@@ -118,34 +163,18 @@ Everything should become easier.
 
 ## Theme
 
-**Application Platform**
+**Application Platform** — Porter begins managing applications instead of
+individual VMs.
 
-Porter begins managing applications instead of individual VMs.
-
-### Projects
-
-Projects
-
-↓
-
-Deployment
-
-↓
-
-Services
-
-↓
-
-MicroVMs
+Projects → Deployment → Services → MicroVMs
 
 Features
-
-* Project grouping
-* Service grouping
-* Multiple deployments
-* Version history
-* Rollback
-* Clone deployment
+- Project grouping
+- Service grouping
+- Multiple deployments
+- Version history
+- Rollback
+- Clone deployment
 
 ---
 
@@ -153,27 +182,17 @@ Features
 
 ## Theme
 
-**Golden Images**
+**Golden Images** — reusable VM templates.
 
-Support reusable VM templates.
-
-### Images
-
-* Ubuntu
-* Debian
-* Alpine
-* Builder images
-* Company images
-* AI runtime
-* Database templates
+Images: Ubuntu, Debian, Alpine, Builder images, Company images, AI runtime,
+Database templates.
 
 Features
-
-* Image library
-* Import/export
-* Snapshot manager
-* Clone image
-* Image versioning
+- Image library
+- Import/export
+- Snapshot manager
+- Clone image
+- Image versioning
 
 ---
 
@@ -181,30 +200,23 @@ Features
 
 ## Theme
 
-**Service Discovery**
-
-Porter starts behaving like Kubernetes.
+**Service Discovery** — Porter starts behaving like Kubernetes.
 
 Features
-
-* ReplicaSets
-* Scaling
-* Health checks
-* Restart policy
-* Internal DNS
-* Service discovery
-* Dependency ordering
-
-Compose
+- ReplicaSets
+- Scaling
+- Health checks
+- Restart policy
+- Internal DNS
+- Service discovery
+- Dependency ordering
 
 ```yaml
+# compose.yml
 api:
   replicas: 3
 ```
-
-↓
-
-Three MicroVMs.
+↓ Three MicroVMs.
 
 ---
 
@@ -212,19 +224,18 @@ Three MicroVMs.
 
 ## Theme
 
-**Networking**
+**Networking** — production traffic paths.
 
 Features
-
-* Overlay networking
-* Load balancer
-* Firewall
-* Domains
-* HTTPS
-* Let's Encrypt
-* Wildcard domains
-* Reverse proxy
-* Traffic dashboard
+- Overlay networking
+- Load balancer
+- Firewall
+- Domains
+- HTTPS
+- Let's Encrypt
+- Wildcard domains
+- Reverse proxy
+- Traffic dashboard
 
 ---
 
@@ -235,13 +246,12 @@ Features
 **Storage**
 
 Features
-
-* Persistent volumes
-* Snapshots
-* Scheduled backups
-* Restore
-* Object storage support
-* Shared volumes
+- Persistent volumes
+- Snapshots
+- Scheduled backups
+- Restore
+- Object storage support
+- Shared volumes
 
 ---
 
@@ -252,26 +262,13 @@ Features
 **Multi-Host**
 
 Features
-
-* Porter Agent
-* Register server
-* Cluster view
-* Scheduler
-* Resource allocation
-* VM migration (future)
-* Node labels
-
-Dashboard
-
-```
-Cluster
-
-Server A
-
-Server B
-
-Server C
-```
+- Porter Agent
+- Register server
+- Cluster view
+- Scheduler
+- Resource allocation
+- VM migration (future)
+- Node labels
 
 ---
 
@@ -282,14 +279,13 @@ Server C
 **Observability**
 
 Features
-
-* Metrics
-* Events
-* Alerts
-* Live traffic
-* Live resource graphs
-* Audit log
-* Notifications
+- Metrics
+- Events
+- Alerts
+- Live traffic
+- Live resource graphs
+- Audit log
+- Notifications
 
 ---
 
@@ -297,139 +293,53 @@ Features
 
 ## Theme
 
-**Feature Freeze**
+**Feature Freeze** — no new features. Only bug fixes, performance, memory
+optimization, security review, documentation, API/CLI freeze, UI polish,
+testing, benchmarking.
 
-No new features.
-
-Only
-
-* Bug fixes
-* Performance
-* Memory optimization
-* Security review
-* Documentation
-* API freeze
-* CLI freeze
-* UI polish
-* Testing
-* Benchmarking
-
-Goal
-
-Everything advertised works.
+Goal: everything advertised works, ready for v1.0.0.
 
 ---
-
-# Phase II
-
-# v1.0.0
-
-## Stable Release
-
-Production-ready.
-
-### Complete Features
-
-Deploy from
-
-* OCI Image
-* Docker Compose
-* Git Repository
-* Golden MicroVM Image
-
-Manage
-
-* Projects
-* Services
-* MicroVMs
-* Domains
-* Volumes
-* Networks
-* Secrets
-
-Observe
-
-* Logs
-* Metrics
-* Traffic
-* Events
-
-Operate
-
-* Browser Console
-* Optional SSH
-* REST API
-* CLI
-* Dashboard
-
-Developer Experience
-
-* One-click deployment
-* Templates
-* Image library
-* Build pipeline
-* Automatic TLS
-
-The API and deployment model are considered stable.
-
----
-
-# Phase III
 
 # v1.1.0
 
 ## Theme
 
-**Cloud Platform**
-
-This is where Porter moves beyond a self-hosted deployment tool.
+**Cloud Platform** — Porter moves beyond a self-hosted deployment tool.
 
 ### High Availability
-
-* Multi-node scheduling
-* Automatic failover
-* Self-healing
-* Rolling updates
-* Canary deployments
-* Blue/Green deployments
+- Multi-node scheduling
+- Automatic failover
+- Self-healing
+- Rolling updates
+- Canary deployments
+- Blue/Green deployments
 
 ### Scaling
-
-* Autoscaling
-* Resource quotas
-* Cluster balancing
-* Scheduling policies
+- Autoscaling
+- Resource quotas
+- Cluster balancing
+- Scheduling policies
 
 ### Marketplace
-
-One-click deployments
-
-* WordPress
-* Ghost
-* Grafana
-* Prometheus
-* PostgreSQL
-* Redis
-* N8N
-* Supabase
+One-click deployments: WordPress, Ghost, Grafana, Prometheus, PostgreSQL,
+Redis, N8N, Supabase.
 
 ### Enterprise
-
-* RBAC
-* Organizations
-* Teams
-* SSO
-* Audit logging
-* API keys
+- RBAC
+- Organizations
+- Teams
+- SSO
+- Audit logging
+- API keys
 
 ### Platform
-
-* Plugin SDK
-* Extensions
-* Webhooks
-* Terraform provider
-* GitOps
-* CI/CD integrations
+- Plugin SDK
+- Extensions
+- Webhooks
+- Terraform provider
+- GitOps
+- CI/CD integrations
 
 ---
 
@@ -437,30 +347,33 @@ One-click deployments
 
 Porter evolves into a complete MicroVM-native cloud platform.
 
-* Distributed control plane
-* Global multi-region deployments
-* Edge node support
-* ARM and x86 scheduling
-* GPU workloads
-* AI/ML runtime templates
-* Live migration (if supported by the runtime)
-* Built-in object storage
-* Managed databases
-* Service mesh
-* eBPF observability
-* WASM workload support
-* Policy engine
-* Marketplace ecosystem
-* Hosted Porter Cloud
+- Distributed control plane
+- Global multi-region deployments
+- Edge node support
+- ARM and x86 scheduling
+- GPU workloads
+- AI/ML runtime templates
+- Live migration (if supported by the runtime)
+- Built-in object storage
+- Managed databases
+- Service mesh
+- eBPF observability
+- WASM workload support
+- Policy engine
+- Marketplace ecosystem
+- Hosted Porter Cloud
 
 ## Guiding Principles
 
 Every release should reinforce these goals:
 
-* **MicroVM-first:** Firecracker is the execution engine, with containers used only as an application packaging format.
-* **OCI-native:** Use OCI images and registries rather than inventing a new image ecosystem.
-* **Developer-friendly:** Support Docker Compose, Git repositories, and browser-based management to reduce operational complexity.
-* **Pure Go control plane:** Keep Porter itself as a Go-native platform, with Firecracker and `firecracker-containerd` as the primary runtime dependencies.
-* **Single binary experience:** Installation, upgrades, and operation should remain as simple as possible while expanding capabilities over time.
-
-This roadmap provides a coherent path from an initial single-host MicroVM platform to a mature orchestration system without attempting to replicate the full complexity of Kubernetes from the outset.
+- **MicroVM-first:** Firecracker is the execution engine, with containers used
+  only as an application packaging format.
+- **OCI-native:** Use OCI images and registries rather than inventing a new
+  image ecosystem.
+- **Developer-friendly:** Support Docker Compose, Git repositories, and
+  browser-based management to reduce operational complexity.
+- **Pure Go control plane:** Keep Porter itself as a Go-native platform, with
+  Firecracker and `firecracker-containerd` as the primary runtime dependencies.
+- **Single binary experience:** Installation, upgrades, and operation should
+  remain as simple as possible while expanding capabilities over time.

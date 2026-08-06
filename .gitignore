@@ -31,6 +31,8 @@ frontend/.vite/
 # Firecracker/VM runtime artifacts (reproducible, not source)
 vms/rootfs.ext4
 vms/vmlinux
+backend/rootfs.ext4
+backend/vmlinux
 
 # Release archives
 porter.zip

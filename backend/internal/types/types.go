@@ -56,6 +56,8 @@ type VM struct {
 	ReplicaIndex int               `json:"replica_index"`
 	Image        string            `json:"image"`
 	RootfsPath   string            `json:"rootfs_path,omitempty"`
+	ContainerID  string            `json:"container_id,omitempty"`
+	TaskID       string            `json:"task_id,omitempty"`
 	VCPUs        int               `json:"vcpus"`
 	MemMiB       int               `json:"mem_mib"`
 	IPAddress    string            `json:"ip_address"`

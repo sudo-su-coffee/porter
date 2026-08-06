@@ -17,10 +17,23 @@ type Config struct {
 	StateFile  string // SQLite database file path
 	APIToken   string
 
-	KernelImage    string
+	// Linux-host VM wiring. Porter boots OCI images through containerd +
+	// the `aws.firecracker` shim; kernel/rootfs/jailer live in the host's
+	// /etc/containerd/firecracker-runtime.json (see deploy/host/).
+	ContainerdSocket string // e.g. /run/containerd/containerd.sock
+	Snapshotter      string // containerd snapshotter to pull/unpack into (devmapper on a real host)
+	Namespace        string // containerd namespace, e.g. "porter"
+	LogsDir          string // where per-VM stdio logs land, e.g. /var/log/porter
+
+	// Kernel/rootfs/firecracker are consumed by the host (the shim's
+	// /etc/containerd/firecracker-runtime.json), not by Porter at runtime;
+	// kept for `porter kernel set` and documentation. The containerd fields
+	// above are what Porter actually uses.
+	KernelImage    string // shared vmlinux for the shim (provision with `porter kernel set`)
 	RootfsPath     string
 	FirecrackerBin string
-	ImagesDir      string // directory of vms/images/*.json image-catalog manifests
+
+	ImagesDir string // directory of vms/images/*.json image-catalog manifests
 
 	AdminUsername string
 	AdminPassword string
@@ -32,11 +45,14 @@ type Config struct {
 // config.
 func LoadConfig(path string) (*Config, error) {
 	cfg := &Config{
-		ListenAddr:     ":8080",
-		StateFile:      "porter.db",
-		FirecrackerBin: "firecracker",
-		ImagesDir:      "vms/images",
-		AdminUsername:  "admin",
+		ListenAddr:       ":8080",
+		StateFile:        "porter.db",
+		ContainerdSocket: "/run/containerd/containerd.sock",
+		Snapshotter:      "devmapper",
+		Namespace:        "porter",
+		LogsDir:          "/var/log/porter",
+		ImagesDir:        "vms/images",
+		AdminUsername:    "admin",
 	}
 
 	data, err := os.ReadFile(path)
@@ -53,6 +69,10 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.KernelImage = tomlGet(sections, "firecracker", "kernel_image", cfg.KernelImage)
 		cfg.RootfsPath = tomlGet(sections, "firecracker", "rootfs_path", cfg.RootfsPath)
 		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
+		cfg.ContainerdSocket = tomlGet(sections, "firecracker", "containerd_socket", cfg.ContainerdSocket)
+		cfg.Snapshotter = tomlGet(sections, "firecracker", "snapshotter", cfg.Snapshotter)
+		cfg.Namespace = tomlGet(sections, "firecracker", "namespace", cfg.Namespace)
+		cfg.LogsDir = tomlGet(sections, "firecracker", "logs_dir", cfg.LogsDir)
 		cfg.ImagesDir = tomlGet(sections, "firecracker", "images_dir", cfg.ImagesDir)
 		cfg.AdminUsername = tomlGet(sections, "admin", "username", cfg.AdminUsername)
 		cfg.AdminPassword = tomlGet(sections, "admin", "password", cfg.AdminPassword)

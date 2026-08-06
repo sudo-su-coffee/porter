@@ -7,11 +7,13 @@ const emit = defineEmits(["close", "created"]);
 const activeTab = ref("single");
 const error = ref("");
 
+// Single-image form
 const name = ref("");
 const image = ref("");
 const vcpus = ref(1);
 const memMib = ref(256);
 
+// Compose form
 const composeName = ref("");
 const composeYaml = ref(`services:
   api:
@@ -25,8 +27,50 @@ const composeYaml = ref(`services:
     depends_on:
       - api`);
 
+// Image library
+const images = ref([]);
+const imagesLoading = ref(false);
+const imagesError = ref("");
+
 function onOverlayClick(e) {
   if (e.target === e.currentTarget) emit("close");
+}
+
+async function loadLibrary() {
+  activeTab.value = "library";
+  if (images.value.length || imagesLoading.value) return;
+  imagesLoading.value = true;
+  imagesError.value = "";
+  try {
+    images.value = (await api("/images")) || [];
+  } catch (e) {
+    imagesError.value = e.message;
+  } finally {
+    imagesLoading.value = false;
+  }
+}
+
+// The backend may ship a URL logo (rendered as an <img>) or a plain
+// text/emoji glyph (shown inline) so the dashboard still works offline.
+function logoIsUrl(img) {
+  return typeof img.logo === "string" && /^https?:\/\//i.test(img.logo.trim());
+}
+function slug(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// Clicking a library card pre-fills the single-image form so the user
+// can tweak then deploy. The image's own default ports/env are added.
+function pickImage(img) {
+  name.value = slug(img.name || img.image);
+  image.value = img.image;
+  vcpus.value = img.vcpus || 1;
+  memMib.value = img.mem_mib || 256;
+  activeTab.value = "single";
+  error.value = "";
 }
 
 async function deploy() {
@@ -70,6 +114,7 @@ async function deploy() {
         <button class="tab" :class="{ active: activeTab === 'compose' }" @click="activeTab = 'compose'">
           docker-compose.yml
         </button>
+        <button class="tab" :class="{ active: activeTab === 'library' }" @click="loadLibrary">Image Library</button>
       </div>
 
       <div v-if="error" class="error-box">{{ error }}</div>
@@ -94,9 +139,39 @@ async function deploy() {
         </div>
       </div>
 
+      <div v-show="activeTab === 'library'">
+        <div v-if="imagesError" class="error-box">{{ imagesError }}</div>
+        <div v-else-if="imagesLoading && !images.length" class="image-grid">
+          <div v-for="i in 6" :key="i" class="image-card"><div class="skeleton skeleton-line" style="height: 90px"></div></div>
+        </div>
+        <div v-else-if="!images.length" class="page-sub" style="padding: 12px 0">No images in the library yet.</div>
+        <div v-else class="image-grid">
+          <button v-for="img in images" :key="img.id" class="image-card" @click="pickImage(img)">
+            <div class="image-logo">
+              <img v-if="logoIsUrl(img)" :src="img.logo" :alt="img.name" />
+              <template v-else>{{ img.logo || (img.name || "?")[0] }}</template>
+            </div>
+            <div class="image-card-name">{{ img.name }}</div>
+            <div class="image-card-ref">{{ img.image }}</div>
+            <div class="image-card-meta">
+              <span v-if="img.vcpus" class="image-tag">{{ img.vcpus }} vCPU</span>
+              <span v-if="img.mem_mib" class="image-tag">{{ img.mem_mib }} MiB</span>
+              <span v-for="t in img.tags || []" :key="t" class="image-tag">{{ t }}</span>
+            </div>
+            <div class="image-card-hint">Click to pre-fill</div>
+          </button>
+        </div>
+      </div>
+
       <div class="modal-footer">
         <button class="btn" @click="emit('close')">Cancel</button>
-        <button class="btn btn-primary" @click="deploy">Deploy</button>
+        <button
+          class="btn btn-primary"
+          :disabled="activeTab === 'library'"
+          @click="deploy"
+        >
+          Deploy
+        </button>
       </div>
     </div>
   </div>

@@ -3,7 +3,10 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -82,6 +85,10 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /images", a.auth(a.handleImages))
 	mux.Handle("GET /overview", a.auth(a.handleOverview))
 
+	mux.Handle("GET /users", a.auth(a.handleListUsers))
+	mux.Handle("POST /users", a.auth(a.handleCreateUser))
+	mux.Handle("DELETE /users/{id}", a.auth(a.handleDeleteUser))
+
 	mux.Handle("GET /projects", a.auth(a.handleListProjects))
 	mux.Handle("POST /projects/compose", a.auth(a.handleCreateComposeProject))
 	mux.Handle("GET /projects/{id}", a.auth(a.handleGetProject))
@@ -120,14 +127,85 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+
+	// 1) The bootstrap admin from porter.toml [admin].
 	userOK := subtle.ConstantTimeCompare([]byte(req.Username), []byte(a.adminUser)) == 1
 	passOK := subtle.ConstantTimeCompare([]byte(req.Password), []byte(a.adminPass)) == 1
-	if !userOK || !passOK {
-		time.Sleep(300 * time.Millisecond) // a small, cheap brake on brute-forcing
-		writeErr(w, http.StatusUnauthorized, "invalid username or password")
+	if userOK && passOK {
+		writeJSON(w, http.StatusOK, map[string]string{"token": a.token})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": a.token})
+
+	// 2) Any additional user stored in SQLite (see /users).
+	if dbUser, ok := a.store.GetUserByUsername(req.Username); ok {
+		if verifyPassword(req.Password, dbUser.PasswordHash, dbUser.Salt) {
+			writeJSON(w, http.StatusOK, map[string]string{"token": a.token})
+			return
+		}
+	}
+
+	time.Sleep(300 * time.Millisecond) // a small, cheap brake on brute-forcing
+	writeErr(w, http.StatusUnauthorized, "invalid username or password")
+}
+
+// --- Users (accounts beyond the bootstrap [admin]) ---
+
+func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.store.ListUsers())
+}
+
+func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Username == "" || req.Password == "" {
+		writeErr(w, http.StatusBadRequest, "\"username\" and \"password\" are required")
+		return
+	}
+	if _, ok := a.store.GetUserByUsername(req.Username); ok {
+		writeErr(w, http.StatusConflict, "user already exists")
+		return
+	}
+	if req.Role == "" {
+		req.Role = "admin"
+	}
+	hash, salt := hashPassword(req.Password)
+	u := &types.User{
+		ID:           store.NewID(),
+		Username:     req.Username,
+		Role:         req.Role,
+		PasswordHash: hash,
+		Salt:         salt,
+		CreatedAt:    time.Now().UTC(),
+	}
+	a.store.PutUser(u)
+	writeJSON(w, http.StatusCreated, u)
+}
+
+func (a *API) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	a.store.DeleteUser(r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// hashPassword returns a salted SHA-256 hash of password. Placeholder KDF
+// for v0.1.0 (stdlib-only); swap for bcrypt/argon2 in a hardening pass.
+func hashPassword(password string) (hash, salt string) {
+	sb := make([]byte, 16)
+	_, _ = rand.Read(sb)
+	salt = hex.EncodeToString(sb)
+	h := sha256.Sum256([]byte(salt + password))
+	return hex.EncodeToString(h[:]), salt
+}
+
+func verifyPassword(password, hash, salt string) bool {
+	h := sha256.Sum256([]byte(salt + password))
+	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(h[:])), []byte(hash)) == 1
 }
 
 // --- VMs ---

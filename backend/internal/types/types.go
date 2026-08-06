@@ -101,3 +101,16 @@ type TrafficEntry struct {
 	DurationMS int       `json:"duration_ms"`
 	RemoteIP   string    `json:"remote_ip"`
 }
+
+// User is a non-bootstrap account stored in SQLite. The very first admin
+// lives in porter.toml ([admin]); every additional user is persisted here
+// so accounts can be managed without editing config. Passwords are stored
+// as a salted hash (see api.hashPassword).
+type User struct {
+	ID           string    `json:"id"`
+	Username     string    `json:"username"`
+	Role         string    `json:"role"`
+	PasswordHash string    `json:"-"`
+	Salt         string    `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
+}

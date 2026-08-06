@@ -3,12 +3,14 @@ import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "../api/client";
 import { connectEvents, disconnectEvents } from "../api/events";
+import OverviewBar from "../components/OverviewBar.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import HealthPill from "../components/HealthPill.vue";
 
 const router = useRouter();
 const projects = ref([]);
 const vms = ref([]);
+const overview = ref(null);
 const loading = ref(true);
 const error = ref("");
 
@@ -26,7 +28,8 @@ function projectStats(p) {
 async function load() {
   error.value = "";
   try {
-    const [p, v] = await Promise.all([api("/projects"), api("/vms")]);
+    const [o, p, v] = await Promise.all([api("/overview"), api("/projects"), api("/vms")]);
+    overview.value = o;
     projects.value = p || [];
     vms.value = v || [];
   } catch (e) {
@@ -53,8 +56,15 @@ onUnmounted(() => disconnectEvents());
 
   <div v-if="error" class="error-box">{{ error }}</div>
 
-  <div v-else-if="isEmpty && !loading" class="empty-state">
+  <OverviewBar :overview="overview" :loading="loading" />
+
+  <div v-if="isEmpty && !loading" class="empty-state">
+    <div style="font-size: 15px; margin-bottom: 8px">No VMs yet</div>
     Deploy your first image or compose file — click <b>New Project</b> above.
+  </div>
+
+  <div v-else-if="loading" class="grid">
+    <div v-for="i in 4" :key="i" class="card"><div class="skeleton skeleton-block"></div></div>
   </div>
 
   <div v-else class="grid">
@@ -90,8 +100,7 @@ onUnmounted(() => disconnectEvents());
         <span class="card-badge">single-image</span>
       </div>
       <div class="card-meta">
-        <StatusBadge :state="v.state" />
-        <HealthPill :health="v.health_status" />
+        <span><StatusBadge :state="v.state" /> <HealthPill :health="v.health_status" /></span>
         <span class="mono">{{ v.image }}</span>
         <span v-if="v.ip_address" class="mono">{{ v.ip_address }}</span>
       </div>

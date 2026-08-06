@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS domains (
 	data   TEXT NOT NULL,
 	PRIMARY KEY (vm_id, domain)
 );
+CREATE TABLE IF NOT EXISTS users (
+	id   TEXT PRIMARY KEY,
+	data TEXT NOT NULL
+);
 `
 
 // NewStore opens (creating if needed) the SQLite database at path and
@@ -252,6 +256,58 @@ func (s *Store) RemoveDomain(vmID, domain string) bool {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0
+}
+
+// --- Users (accounts beyond the bootstrap [admin] in config) ---
+
+func (s *Store) PutUser(u *types.User) {
+	data, err := json.Marshal(u)
+	if err != nil {
+		log.Printf("store: marshal user %s: %v", u.ID, err)
+		return
+	}
+	if _, err := s.db.Exec(`INSERT INTO users (id, data) VALUES (?, ?)
+		ON CONFLICT(id) DO UPDATE SET data = excluded.data`, u.ID, data); err != nil {
+		log.Printf("store: put user %s: %v", u.ID, err)
+	}
+}
+
+func (s *Store) ListUsers() []*types.User {
+	rows, err := s.db.Query(`SELECT data FROM users`)
+	if err != nil {
+		log.Printf("store: list users: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.User, 0)
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			continue
+		}
+		var u types.User
+		if err := json.Unmarshal(data, &u); err != nil {
+			continue
+		}
+		out = append(out, &u)
+	}
+	return out
+}
+
+// GetUserByUsername returns the DB user with the given username, if any.
+func (s *Store) GetUserByUsername(username string) (*types.User, bool) {
+	for _, u := range s.ListUsers() {
+		if u.Username == username {
+			return u, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Store) DeleteUser(id string) {
+	if _, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
+		log.Printf("store: delete user %s: %v", id, err)
+	}
 }
 
 // --- Traffic ring buffer (bounded, in-memory only) ---

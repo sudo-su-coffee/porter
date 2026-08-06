@@ -1,0 +1,15 @@
+build=0
+?   	porter	[no test files]
+?   	porter/cmd/porter	[no test files]
+?   	porter/internal/api	[no test files]
+?   	porter/internal/command	[no test files]
+ok  	porter/internal/compose	(cached)
+?   	porter/internal/config	[no test files]
+?   	porter/internal/event	[no test files]
+?   	porter/internal/imagecatalog	[no test files]
+?   	porter/internal/net	[no test files]
+?   	porter/internal/runtime	[no test files]
+ok  	porter/internal/store	3.026s
+?   	porter/internal/types	[no test files]
+test=0
+bin=0

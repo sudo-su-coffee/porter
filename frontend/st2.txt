@@ -1,0 +1,7 @@
+build=1
+# ./...
+pattern ./...: directory prefix . does not contain main module or its selected dependencies
+FAIL	./... [setup failed]
+FAIL
+test=1
+bin=1

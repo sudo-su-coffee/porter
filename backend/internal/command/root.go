@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,6 +29,7 @@ import (
 	netmgr "porter/internal/net"
 	"porter/internal/runtime"
 	"porter/internal/store"
+	"porter/internal/types"
 )
 
 // Run dispatches on the first argument and executes the matching
@@ -177,17 +179,66 @@ func runWorker(args []string, version string) int {
 	workerCount := flags.Int("workers", 1, "Number of workers to run")
 	_ = flags.Parse(args)
 
-	if _, err := config.LoadConfig(*configPath); err != nil {
+	cfg, err := config.LoadConfig(*configPath)
+	if err != nil {
 		log.Fatalf("config error: %v", err)
 	}
-	log.Printf("Porter worker %s — %d worker(s), no background jobs registered yet", version, *workerCount)
 
-	// Keep running until signalled to stop.
+	st := store.NewStore(cfg.StateFile)
+	hub := event.NewHub()
+	vmm := runtime.NewVMManager(runtime.FCConfig{
+		ContainerdSocket: cfg.ContainerdSocket,
+		Snapshotter:      cfg.Snapshotter,
+		Namespace:        cfg.Namespace,
+		LogsDir:          cfg.LogsDir,
+	}, st, hub)
+	defer vmm.Close()
+
+	log.Printf("Porter worker %s — %d worker(s)", version, *workerCount)
+
+	// Health sweep: periodically verify running VMs in the store and degrade
+	// any that aren't reachable. (Live VMs started by a server process hold
+	// their own containerd handles; this sweep is the disconnected worker's
+	// view of VM health from the persisted state.)
+	sweep := func() {
+		for _, vm := range st.ListVMs() {
+			if vm.State != types.StateRunning || vm.Healthcheck == nil || vm.IPAddress == "" {
+				continue
+			}
+			if !tcpReachable(vm.IPAddress, vm.Healthcheck.Port) {
+				vm.HealthStatus = types.HealthUnhealthy
+				st.PutVM(vm)
+			}
+		}
+	}
+	sweep()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	<-shutdown
-	log.Printf("Worker shutting down")
-	return 0
+	for {
+		select {
+		case <-ticker.C:
+			sweep()
+		case <-shutdown:
+			log.Printf("Worker shutting down")
+			return 0
+		}
+	}
+}
+
+// tcpReachable is a small worker-side health probe (mirrors runtime.probeHealth).
+func tcpReachable(host string, port int) bool {
+	if port <= 0 {
+		return true
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // runKernel provisions the shared Firecracker kernel (vmlinux) from

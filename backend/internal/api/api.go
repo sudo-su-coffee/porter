@@ -81,6 +81,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /vms/{id}/traffic", a.auth(a.handleTraffic))
 	mux.Handle("GET /vms/{id}/logs", a.auth(a.handleLogs))
 	mux.Handle("GET /vms/{id}/ssh-info", a.auth(a.handleSSHInfo))
+	mux.Handle("POST /vms/{id}/ssh-cert", a.auth(a.handleSSHCert))
 
 	mux.Handle("GET /images", a.auth(a.handleImages))
 	mux.Handle("GET /overview", a.auth(a.handleOverview))
@@ -335,10 +336,18 @@ func (a *API) registerStableDomain(vm *types.VM) {
 	if vm.ServiceName != "" {
 		host = vm.ServiceName
 	}
-	a.store.AddDomain(vm.ID, &types.Domain{
+	d := &types.Domain{
 		Domain: fmt.Sprintf("%s.%s", host, a.baseDomain),
 		Type:   "stable",
 		Status: "verified",
+	}
+	a.store.AddDomain(vm.ID, d)
+	a.emitDomainStatus(vm.ID, d.Domain, d.Status)
+}
+
+func (a *API) emitDomainStatus(vmID, domain, status string) {
+	a.hub.Broadcast("domain.status", map[string]any{
+		"vm_id": vmID, "domain": domain, "status": status,
 	})
 }
 
@@ -361,6 +370,7 @@ func (a *API) handleAddDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	d := &types.Domain{Domain: req.Domain, Type: "custom", Status: "pending"}
 	a.store.AddDomain(id, d)
+	a.emitDomainStatus(id, d.Domain, d.Status)
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"domain": d.Domain, "type": d.Type, "status": d.Status,
 		"required_record": map[string]string{
@@ -376,6 +386,7 @@ func (a *API) handleRemoveDomain(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
+	a.emitDomainStatus(id, domain, "removed")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
@@ -462,6 +473,26 @@ func (a *API) handleSSHInfo(w http.ResponseWriter, r *http.Request) {
 		"target_name":  target,
 		"command":      fmt.Sprintf("ssh %s@%s -p 2222", target, gwHost),
 	})
+}
+
+// handleSSHCert signs a short-lived client certificate with the SSH CA.
+// The SSH gateway is disabled in v0.1.0 (see versions.md), so this is a
+// forward-compatible route that reports the gateway isn't up yet rather
+// than 404-ing.
+func (a *API) handleSSHCert(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.store.GetVM(r.PathValue("id")); !ok {
+		writeErr(w, http.StatusNotFound, "vm not found")
+		return
+	}
+	var req struct {
+		PublicKey string `json:"public_key"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.PublicKey == "" {
+		writeErr(w, http.StatusBadRequest, "\"public_key\" is required")
+		return
+	}
+	writeErr(w, http.StatusConflict, "ssh gateway disabled in v0.1.0 (see versions.md)")
 }
 
 // --- Projects / Compose ---

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -36,13 +37,16 @@ type FCConfig struct {
 	Namespace        string // containerd namespace, e.g. "porter"
 	LogsDir          string // where per-VM stdio logs land (e.g. /var/log/porter)
 	Simulate         bool   // fake the lifecycle (pending->running) for dev/demo, no containerd needed
+	BareKernel       string // shared vmlinux used to boot BARE (rootfs.ext4) catalog images directly
 }
 
 // runningVM tracks the live containerd handles for one booted VM.
 type runningVM struct {
-	client    *containerd.Client
+	client    *containerd.Client // set for containerd (OCI) boots
 	container containerd.Container
 	task      containerd.Task
+	cmd       *exec.Cmd // set for bare (direct-Firecracker) boots
+	sockPath  string
 	cancel    context.CancelFunc
 }
 
@@ -88,6 +92,12 @@ func (m *VMManager) Close() {
 // CNI provides the real tap/host device).
 func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 	m.setState(vm, types.StateBooting, "")
+	// A BARE microVM image (rootfs.ext4 registered via a catalog "rootfs"
+	// field) has no OCI image to pull — boot it directly with firecracker.
+	if vm.RootfsPath != "" {
+		m.bootBare(vm, spec)
+		return
+	}
 	go func() {
 		if m.cfg.Simulate {
 			m.simulateBoot(vm, spec)
@@ -100,7 +110,9 @@ func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 			return
 		}
 		if _, err := os.Stat(m.cfg.ContainerdSocket); err != nil {
-			m.setState(vm, types.StateFailed, fmt.Sprintf("containerd socket not found at %s: %v — is containerd running? (run `deploy/install.sh` on the host, or set simulate = true in porter.toml for a dev/demo run)", m.cfg.ContainerdSocket, err))
+			// Real microVM boots require containerd on the host. Don't fake it
+			// — tell the user exactly what's missing so they can provision.
+			m.setState(vm, types.StateFailed, fmt.Sprintf("containerd socket not found at %s: %v — is containerd running? (run `deploy/install.sh` on the host)", m.cfg.ContainerdSocket, err))
 			return
 		}
 		if vm.Image == "" {
@@ -119,13 +131,17 @@ func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 		defer clnt.Close()
 
 		// Pull + recreate the image once; the snapshot is materialized per-VM
-		// via WithNewSnapshot below.
-		img, err := clnt.Pull(ctx, vm.Image,
+		// via WithNewSnapshot below. Bound the pull so an offline/hanging
+		// registry (or a bogus image ref like "demo") can't leave the VM stuck
+		// in "booting" forever — it transitions to "failed" instead.
+		pullCtx, pullCancel := context.WithTimeout(ctx, 120*time.Second)
+		img, err := clnt.Pull(pullCtx, vm.Image,
 			containerd.WithPullUnpack,
 			containerd.WithPullSnapshotter(m.cfg.Snapshotter),
 		)
+		pullCancel()
 		if err != nil {
-			m.setState(vm, types.StateFailed, fmt.Sprintf("pull image %q (is the snapshotter %q configured on the host?): %v", vm.Image, m.cfg.Snapshotter, err))
+			m.setState(vm, types.StateFailed, fmt.Sprintf("pull image %q (is it a valid registry image, and is the host online?): %v", vm.Image, err))
 			return
 		}
 
@@ -265,6 +281,124 @@ func envSlice(env map[string]string) []string {
 	return out
 }
 
+// bootBare boots a BARE microVM image (rootfs.ext4 from the catalog) with the
+// direct Firecracker API. No containerd involved — the image is just kernel +
+// rootfs files. Used for catalog images registered with a "rootfs" field.
+func (m *VMManager) bootBare(vm *types.VM, spec netmgr.BootSpec) {
+	go func() {
+		if m.cfg.BareKernel == "" {
+			m.setState(vm, types.StateFailed, `no vmlinux for bare images — set [firecracker] kernel_image / PORTER_KERNEL_IMAGE, or run "porter kernel set"`)
+			return
+		}
+		if _, err := os.Stat(m.cfg.BareKernel); err != nil {
+			m.setState(vm, types.StateFailed, fmt.Sprintf("vmlinux not found: %v (run `porter kernel set`)", err))
+			return
+		}
+		if _, err := os.Stat(vm.RootfsPath); err != nil {
+			m.setState(vm, types.StateFailed, fmt.Sprintf("rootfs not found: %v", err))
+			return
+		}
+
+		ip, ipnet, err := net.ParseCIDR(spec.CIDR)
+		if err != nil {
+			m.setState(vm, types.StateFailed, fmt.Sprintf("invalid CIDR: %v", err))
+			return
+		}
+		mask := net.IP(ipnet.Mask).String()
+		sockPath := fmt.Sprintf("/tmp/porter-fc-%s.sock", vm.ID)
+		_ = os.Remove(sockPath)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cmd := exec.Command("firecracker", "--api-sock", sockPath)
+		if err := cmd.Start(); err != nil {
+			cancel()
+			m.setState(vm, types.StateFailed, fmt.Sprintf("start firecracker: %v", err))
+			return
+		}
+		rv := &runningVM{cmd: cmd, sockPath: sockPath, cancel: cancel}
+		m.mu.Lock()
+		m.vms[vm.ID] = rv
+		m.mu.Unlock()
+
+		procDone := make(chan error, 1)
+		go func() { procDone <- cmd.Wait() }()
+
+		readyCtx, readyCancel := context.WithTimeout(ctx, 3*time.Second)
+		err = waitForSocket(readyCtx, sockPath)
+		readyCancel()
+		if err != nil {
+			m.failBare(vm, rv, fmt.Sprintf("firecracker did not open its API socket: %v", err))
+			return
+		}
+
+		fc := newFCClient(sockPath)
+		apiCtx, apiCancel := context.WithTimeout(ctx, 5*time.Second)
+		bootArgs := fmt.Sprintf("console=ttyS0 noapic reboot=k panic=1 pci=off nomodules rw root=/dev/vda ip=%s::%s:%s::eth0:off", ip.String(), spec.GatewayAddr, mask)
+		steps := []struct {
+			name string
+			fn   func() error
+		}{
+			{"boot-source", func() error { return fc.SetBootSource(apiCtx, m.cfg.BareKernel, bootArgs) }},
+			{"drive", func() error { return fc.SetRootDrive(apiCtx, vm.RootfsPath, false) }},
+			{"network-interface", func() error { return fc.SetNetworkInterface(apiCtx, "eth0", spec.MacAddress, spec.HostDevName) }},
+			{"machine-config", func() error { return fc.SetMachineConfig(apiCtx, vm.VCPUs, vm.MemMiB) }},
+			{"start", func() error { return fc.InstanceStart(apiCtx) }},
+		}
+		for _, s := range steps {
+			if err := s.fn(); err != nil {
+				apiCancel()
+				m.failBare(vm, rv, fmt.Sprintf("%s: %v", s.name, err))
+				return
+			}
+		}
+		apiCancel()
+
+		now := time.Now().UTC()
+		vm.StartedAt = &now
+		vm.IPAddress = ip.String()
+		m.setState(vm, types.StateRunning, "")
+		if vm.Healthcheck != nil {
+			m.setHealth(vm, types.HealthChecking)
+			go m.runHealthcheck(vm)
+		} else {
+			m.setHealth(vm, types.HealthHealthy)
+		}
+
+		exitErr := <-procDone
+		m.mu.Lock()
+		_, stillTracked := m.vms[vm.ID]
+		if stillTracked {
+			delete(m.vms, vm.ID)
+		}
+		m.mu.Unlock()
+		if !stillTracked {
+			return
+		}
+		_ = os.Remove(sockPath)
+		msg := "microVM exited"
+		if exitErr != nil {
+			msg = fmt.Sprintf("microVM exited: %v", exitErr)
+		}
+		m.setState(vm, types.StateFailed, msg)
+	}()
+}
+
+func (m *VMManager) failBare(vm *types.VM, rv *runningVM, msg string) {
+	m.mu.Lock()
+	if rv != nil && m.vms[vm.ID] == rv {
+		delete(m.vms, vm.ID)
+	}
+	m.mu.Unlock()
+	if rv != nil && rv.cmd != nil && rv.cmd.Process != nil {
+		_ = rv.cmd.Process.Kill()
+		if rv.cancel != nil {
+			rv.cancel()
+		}
+		_ = os.Remove(rv.sockPath)
+	}
+	m.setState(vm, types.StateFailed, msg)
+}
+
 // Stop shuts a VM down through the shim: SIGTERM for a clean guest shutdown,
 // escalate to SIGKILL after a short grace, then release the container and
 // its snapshot.
@@ -293,6 +427,16 @@ func (m *VMManager) Stop(vm *types.VM) {
 // deletes the task + container (freeing the snapshot). Safe once per VM.
 func (m *VMManager) terminateVM(rv *runningVM) {
 	if rv == nil {
+		return
+	}
+	// Bare (direct-Firecracker) VM: terminate the process, no containerd.
+	if rv.cmd != nil && rv.cmd.Process != nil {
+		_ = rv.cmd.Process.Signal(syscall.SIGTERM)
+		go func(p *os.Process) { time.Sleep(4 * time.Second); _ = p.Kill() }(rv.cmd.Process)
+		if rv.cancel != nil {
+			rv.cancel()
+		}
+		_ = os.Remove(rv.sockPath)
 		return
 	}
 	sigCtx, sigCancel := context.WithTimeout(context.Background(), 2*time.Second)

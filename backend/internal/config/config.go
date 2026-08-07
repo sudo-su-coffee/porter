@@ -14,8 +14,12 @@ import (
 type Config struct {
 	ListenAddr string
 	BaseDomain string
-	StateFile  string // SQLite database file path
 	APIToken   string
+
+	// PostgreSQL state store. DatabaseURL is required — LoadConfig refuses to
+	// start without it. AutoMigrate runs pending SQL migrations at startup.
+	DatabaseURL string
+	AutoMigrate bool
 
 	// Linux-host VM wiring. Porter boots OCI images through containerd +
 	// the `aws.firecracker` shim; kernel/rootfs/jailer live in the host's
@@ -47,7 +51,8 @@ type Config struct {
 func LoadConfig(path string) (*Config, error) {
 	cfg := &Config{
 		ListenAddr:       ":8080",
-		StateFile:        "porter.db",
+		DatabaseURL:      "postgres://porter:porter@localhost:5432/porter?sslmode=disable",
+		AutoMigrate:      true,
 		ContainerdSocket: "/run/containerd/containerd.sock",
 		Snapshotter:      "devmapper",
 		Namespace:        "porter",
@@ -65,8 +70,9 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		cfg.ListenAddr = tomlGet(sections, "server", "listen_addr", cfg.ListenAddr)
 		cfg.BaseDomain = tomlGet(sections, "server", "base_domain", cfg.BaseDomain)
-		cfg.StateFile = tomlGet(sections, "server", "state_file", cfg.StateFile)
 		cfg.APIToken = tomlGet(sections, "server", "api_token", cfg.APIToken)
+		cfg.DatabaseURL = tomlGet(sections, "database", "url", cfg.DatabaseURL)
+		cfg.AutoMigrate = tomlBool(sections, "database", "auto_migrate", cfg.AutoMigrate)
 		cfg.KernelImage = tomlGet(sections, "firecracker", "kernel_image", cfg.KernelImage)
 		cfg.RootfsPath = tomlGet(sections, "firecracker", "rootfs_path", cfg.RootfsPath)
 		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
@@ -88,8 +94,9 @@ func LoadConfig(path string) (*Config, error) {
 	// by systemd/CI rather than written to disk.
 	cfg.ListenAddr = envOr("PORTER_LISTEN_ADDR", cfg.ListenAddr)
 	cfg.BaseDomain = envOr("PORTER_BASE_DOMAIN", cfg.BaseDomain)
-	cfg.StateFile = envOr("PORTER_STATE_FILE", cfg.StateFile)
 	cfg.APIToken = envOr("PORTER_API_TOKEN", cfg.APIToken)
+	cfg.DatabaseURL = envOr("PORTER_DATABASE_URL", cfg.DatabaseURL)
+	cfg.AutoMigrate = envBool("PORTER_AUTO_MIGRATE", cfg.AutoMigrate)
 	cfg.KernelImage = envOr("PORTER_KERNEL_IMAGE", cfg.KernelImage)
 	cfg.RootfsPath = envOr("PORTER_ROOTFS_PATH", cfg.RootfsPath)
 	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
@@ -104,6 +111,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.AdminPassword == "" {
 		return nil, fmt.Errorf("no admin password configured — set [admin] password in %s or PORTER_ADMIN_PASSWORD", path)
+	}
+	if cfg.DatabaseURL == "" {
+		return nil, fmt.Errorf("no database url configured — set [database] url in %s or PORTER_DATABASE_URL", path)
 	}
 	return cfg, nil
 }

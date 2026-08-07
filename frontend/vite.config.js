@@ -22,6 +22,9 @@ export default defineConfig({
       "/health": "http://localhost:8080",
       "/overview": "http://localhost:8080",
       "/images": "http://localhost:8080",
+      "/logs": "http://localhost:8080",
+      "/servers": "http://localhost:8080",
+      "/volumes": "http://localhost:8080",
       "/vms": "http://localhost:8080",
       "/projects": "http://localhost:8080",
       "/events": {

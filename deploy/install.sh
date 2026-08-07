@@ -118,9 +118,10 @@ ensure_firecracker() {
   curl -fsSL "$URL" -o /tmp/fc.tgz || die "could not download firecracker ($URL)"
   rm -rf /tmp/fc-extract && mkdir -p /tmp/fc-extract
   tar -xzf /tmp/fc.tgz -C /tmp/fc-extract
-  FC_BIN=$(find "$(find /tmp/fc-extract -type d -name 'release-v*' | head -1)" -type f -name 'firecracker-*' 2>/dev/null | head -1)
-  JAIL_BIN=$(find "$(find /tmp/fc-extract -type d -name 'release-v*' | head -1)" -type f -name 'jailer-*' 2>/dev/null | head -1)
-  [ -n "$FC_BIN" ] && [ -f "$FC_BIN" ] || die "firecracker binary not found in tarball"
+  # Find the actual binaries anywhere in the extracted tree.
+  FC_BIN=$(find /tmp/fc-extract -type f -name 'firecracker-v*' | head -1)
+  JAIL_BIN=$(find /tmp/fc-extract -type f -name 'jailer-v*' | head -1)
+  [ -n "$FC_BIN" ] && [ -f "$FC_BIN" ] || die "firecracker binary not found in tarball ($URL)"
   install -m 0755 "$FC_BIN" /usr/local/bin/firecracker
   if [ -n "$JAIL_BIN" ] && [ -f "$JAIL_BIN" ]; then
     install -m 0755 "$JAIL_BIN" /usr/local/bin/jailer
@@ -128,7 +129,7 @@ ensure_firecracker() {
   fi
 }
 ensure_firecracker
-ok "firecracker -> /usr/local/bin/firecracker ($(firecracker --version 2>&1 | head -1))"
+ok "firecracker -> /usr/local/bin/firecracker ($(/usr/local/bin/firecracker --version 2>&1 | head -1))"
 
 # ----------------------------------------------------------------------------
 c "4/9  Create porter directories"
@@ -221,14 +222,25 @@ EOF
   ok "bridge $BRIDGE + NAT configured"
 fi
 
+# Give the porter service user access to the containerd Unix socket. It is
+# normally owned root:containerd mode 0660, so porter must join that group or
+# it will hit "dial unix ...: permission denied" on every boot.
+CONTAINERD_GRP=$(stat -c '%G' /run/containerd/containerd.sock 2>/dev/null || echo containerd)
+getent group "$CONTAINERD_GRP" >/dev/null 2>&1 || groupadd -f "$CONTAINERD_GRP"
+if id porter >/dev/null 2>&1; then
+  usermod -aG "$CONTAINERD_GRP" porter
+  ok "porter added to group '$CONTAINERD_GRP' for containerd socket access"
+fi
+chmod 0660 /run/containerd/containerd.sock 2>/dev/null || true
+
 systemctl restart containerd
-ok "containerd restarted"
+ok "containerd restarted (socket group: $CONTAINERD_GRP)"
 
 # ----------------------------------------------------------------------------
 c "8/9  Install Porter binary + config"
 
 install_porter_binary() {
-  local REPO=${PORTER_REPO:?set PORTER_REPO=owner/name (e.g. acme/porter)}
+  local REPO="${PORTER_REPO:-}"   # set PORTER_REPO=owner/name to fetch a release binary; empty => build from source
   local ARCH=${PORTER_ARCH:-$(uname -m)}
   local ASSET=porter-linux-amd64
   case "$ARCH" in
@@ -241,19 +253,34 @@ install_porter_binary() {
     return 0
   fi
 
-  # 2) Resolve the LATEST STABLE release version from the GitHub API, then
-  #    download that exact binary. No build-from-source branch — the release
-  #    binary is the source of truth.
-  local LATEST
-  LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-             | grep '"tag_name"' | head -1 | cut -d'"' -f4) \
-    || die "could not resolve the latest Porter release for $REPO"
-  [ -n "$LATEST" ] || die "no stable release found for $REPO"
+  # 2) Fetch the latest stable release binary IF we know the repo.
+  if [ -n "$REPO" ]; then
+    local LATEST
+    LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    if [ -n "$LATEST" ]; then
+      local URL="https://github.com/$REPO/releases/download/$LATEST/$ASSET"
+      warn "downloading $REPO $LATEST ($ASSET)"
+      if curl -fSL "$URL" -o /usr/local/bin/porter 2>/dev/null; then
+        chmod 0755 /usr/local/bin/porter
+        return 0
+      fi
+      warn "release download failed — falling back to building from source."
+    fi
+  fi
 
-  local URL="https://github.com/$REPO/releases/download/$LATEST/$ASSET"
-  ok "downloading $REPO $LATEST ($ASSET) -> /usr/local/bin/porter"
-  curl -fSL "$URL" -o /usr/local/bin/porter || die "download failed: $URL"
-  chmod 0755 /usr/local/bin/porter
+  # 3) Dev fallback: build the single binary from source (needs Go + Node).
+  #    Resolve the repo root from THIS script's location, not the cwd, so it
+  #    works whether run as ./deploy/install.sh or from anywhere else.
+  local SCRIPT_DIR SRC
+  SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  SRC=${PORTER_SRC:-$(cd "$SCRIPT_DIR/.." && pwd)}
+  if ! command -v go >/dev/null 2>&1; then
+    warn "Go not found — cannot build Porter here. Build it manually or set PORTER_BIN=/path/to/porter."
+    return 0
+  fi
+  warn "building Porter from source at $SRC/backend (set PORTER_REPO=owner/name to fetch a release binary instead)"
+  (cd "$SRC/backend" && go build -trimpath -ldflags "-s -w" -o /usr/local/bin/porter ./cmd/porter)
+  [ -x /usr/local/bin/porter ] || die "could not obtain a porter binary"
 }
 
 install_porter_binary

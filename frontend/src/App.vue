@@ -1,48 +1,47 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { connectionLive } from "./api/events";
+import { connectionLive, connectEvents, disconnectEvents } from "./api/events";
 import NewProjectModal from "./components/NewProjectModal.vue";
 import ToastContainer from "./components/ToastContainer.vue";
-import { ref } from "vue";
+import { clearToken } from "./api/client";
 
 const route = useRoute();
 const router = useRouter();
+const showNewProject = ref(false);
 const showTopbar = computed(() => route.name !== "login");
-const showNewProjectModal = ref(false);
 
-function openNewProject() {
-  showNewProjectModal.value = true;
+function logout() {
+  clearToken();
+  router.push({ name: "login" });
 }
 
-function onCreated(target) {
-  showNewProjectModal.value = false;
-  router.push(target);
-}
+onMounted(() => connectEvents(() => {}));
+onUnmounted(() => disconnectEvents());
 </script>
 
 <template>
   <header class="topbar" v-if="showTopbar">
-    <div class="brand"><span class="brand-mark">▣</span> Porter</div>
+    <div class="brand" @click="router.push({ name: 'list' })">
+      <span class="brand-mark">▣</span> Porter
+    </div>
     <nav class="topnav">
-      <button class="nav-link active" @click="router.push({ name: 'list' })">
-        Deployments
-      </button>
+      <router-link class="nav-link" :to="{ name: 'list' }">Deployments</router-link>
+      <router-link class="nav-link" :to="{ name: 'images' }">Images</router-link>
+      <router-link class="nav-link" :to="{ name: 'servers' }">Servers</router-link>
+      <router-link class="nav-link" :to="{ name: 'logs' }">Logs</router-link>
     </nav>
     <div class="topbar-right">
-      <span
-        class="conn-dot"
-        :class="{ live: connectionLive, down: !connectionLive }"
-        :title="connectionLive ? 'Live' : 'Connecting...'"
-      ></span>
-      <button class="btn btn-primary" @click="openNewProject">New Project</button>
+      <span class="conn-dot" :class="connectionLive ? 'live' : 'down'" :title="connectionLive ? 'Live' : 'Connecting…'"></span>
+      <button class="btn btn-primary" @click="showNewProject = true">New Project</button>
+      <button class="btn" @click="logout">Sign out</button>
     </div>
   </header>
 
-  <main id="app-main">
+  <main>
     <router-view />
   </main>
 
-  <NewProjectModal v-if="showNewProjectModal" @close="showNewProjectModal = false" @created="onCreated" />
+  <NewProjectModal v-if="showNewProject" @close="showNewProject = false" @created="(t) => { showNewProject = false; router.push(t); }" />
   <ToastContainer />
 </template>

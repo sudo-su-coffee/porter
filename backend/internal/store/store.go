@@ -261,6 +261,16 @@ func (s *Store) DeleteVM(id string) {
 	s.logMu.Unlock()
 }
 
+// DeleteReplicasByProject removes every replica row for a project. Needed on
+// redeploy/delete so a fresh pool doesn't collide with the
+// UNIQUE(project_id, replica_index) constraint.
+func (s *Store) DeleteReplicasByProject(projectID string) {
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `DELETE FROM replicas WHERE project_id = $1`, projectID); err != nil {
+		log.Printf("store: delete replicas for project %s: %v", projectID, err)
+	}
+}
+
 // --- Projects (the microVM app; one row, owns the replica pool) ---
 
 func (s *Store) PutProject(p *types.Project) {
@@ -681,13 +691,15 @@ func (s *Store) DeleteSecret(id string) error {
 
 func (s *Store) PutGoldenImage(gi *types.GoldenImage) error {
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO golden_images (id, name, image, description, vcpus, mem_mib, ports, env, tags, logo, version, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+		INSERT INTO golden_images (id, name, image, description, vcpus, mem_mib, ports, env, tags, logo, version, data, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
 		ON CONFLICT (name) DO UPDATE SET image=EXCLUDED.image, description=EXCLUDED.description,
 			vcpus=EXCLUDED.vcpus, mem_mib=EXCLUDED.mem_mib, ports=EXCLUDED.ports,
-			env=EXCLUDED.env, tags=EXCLUDED.tags, logo=EXCLUDED.logo, version=EXCLUDED.version`,
+			env=EXCLUDED.env, tags=EXCLUDED.tags, logo=EXCLUDED.logo, version=EXCLUDED.version,
+			data=EXCLUDED.data`,
 		gi.ID, gi.Name, gi.Image, gi.Description, gi.VCPUs, gi.MemMiB,
-		string(mustJSON(gi.Ports)), string(mustJSON(gi.Env)), gi.Tags, gi.Logo, gi.Version)
+		string(mustJSON(gi.Ports)), string(mustJSON(gi.Env)), gi.Tags, gi.Logo, gi.Version,
+		string(mustJSON(gi)))
 	return err
 }
 
@@ -921,10 +933,17 @@ func (s *Store) TailLogs(vmID string, n int) []string {
 
 func (s *Store) AppendDaemonLog(line string) {
 	s.logMu.Lock()
-	defer s.logMu.Unlock()
 	s.daemonLogs = append(s.daemonLogs, line)
 	if len(s.daemonLogs) > daemonLogRingSize {
 		s.daemonLogs = s.daemonLogs[len(s.daemonLogs)-daemonLogRingSize:]
+	}
+	s.logMu.Unlock()
+
+	// Durable audit trail (best-effort; never blocks the control plane).
+	if s.pool != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = s.pool.Exec(ctx, `INSERT INTO daemon_logs (line) VALUES ($1)`, line)
 	}
 }
 
@@ -946,6 +965,721 @@ func statusFromProject(p *types.Project) string {
 	default:
 		return "running"
 	}
+}
+
+// --- 0011: full-PaaS tables (stacks, api_keys, volumes, alerts, hooks, crons,
+// drains, redirects, firewall, environments, settings, members, builds, networks) ---
+
+// ---- Stacks (docker-compose projects: each service is its own project) ----
+
+func (s *Store) PutStack(st *types.Stack) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO stacks (id, name, org_id, source, compose_yaml) VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, org_id=EXCLUDED.org_id,
+		source=EXCLUDED.source, compose_yaml=EXCLUDED.compose_yaml`,
+		st.ID, st.Name, nullStr(st.OrgID), st.Source, st.ComposeYAML)
+	if err != nil {
+		log.Printf("store: put stack %s: %v", st.ID, err)
+	}
+}
+
+func (s *Store) ListStacks() []*types.Stack {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, name, COALESCE(org_id,''), source, compose_yaml FROM stacks ORDER BY created_at`)
+	if err != nil {
+		log.Printf("store: list stacks: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Stack, 0)
+	for rows.Next() {
+		var st types.Stack
+		if err := rows.Scan(&st.ID, &st.Name, &st.OrgID, &st.Source, &st.ComposeYAML); err != nil {
+			continue
+		}
+		out = append(out, &st)
+	}
+	return out
+}
+
+func (s *Store) GetStack(id string) (*types.Stack, bool) {
+	var st types.Stack
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, name, COALESCE(org_id,''), source, compose_yaml FROM stacks WHERE id = $1`, id).
+		Scan(&st.ID, &st.Name, &st.OrgID, &st.Source, &st.ComposeYAML)
+	if err != nil {
+		return nil, false
+	}
+	return &st, true
+}
+
+func (s *Store) DeleteStack(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM stacks WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete stack %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- API keys ----
+
+func (s *Store) PutAPIKey(k *types.APIKey) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO api_keys (id, user_id, name, token_hash) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, token_hash=EXCLUDED.token_hash`,
+		k.ID, nullStr(k.UserID), k.Name, k.TokenHash)
+	if err != nil {
+		log.Printf("store: put api key %s: %v", k.ID, err)
+	}
+}
+
+func (s *Store) ListAPIKeys(userID string) []*types.APIKey {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, user_id, name, token_hash, created_at, last_used_at FROM api_keys
+		 WHERE user_id = $1 ORDER BY created_at`, nullStr(userID))
+	if err != nil {
+		log.Printf("store: list api keys: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.APIKey, 0)
+	for rows.Next() {
+		var k types.APIKey
+		var lu *time.Time
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &k.TokenHash, &k.CreatedAt, &lu); err != nil {
+			continue
+		}
+		k.LastUsed = lu
+		out = append(out, &k)
+	}
+	return out
+}
+
+func (s *Store) DeleteAPIKey(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete api key %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Volumes ----
+
+func (s *Store) PutVolume(v *types.Volume) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO volumes (id, project_id, name, size_mib, mount_path, status)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (project_id, name) DO UPDATE SET
+			size_mib=EXCLUDED.size_mib, mount_path=EXCLUDED.mount_path, status=EXCLUDED.status`,
+		v.ID, nullStr(v.ProjectID), v.Name, v.SizeMiB, v.Path, statusOf(v))
+	if err != nil {
+		log.Printf("store: put volume %s: %v", v.ID, err)
+	}
+}
+
+func (s *Store) ListVolumes(projectID string) []*types.Volume {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, size_mib, mount_path, status FROM volumes
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list volumes: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Volume, 0)
+	for rows.Next() {
+		var v types.Volume
+		var status string
+		if err := rows.Scan(&v.ID, &v.ProjectID, &v.Name, &v.SizeMiB, &v.Path, &status); err != nil {
+			continue
+		}
+		out = append(out, &v)
+	}
+	return out
+}
+
+func (s *Store) GetVolume(id string) (*types.Volume, bool) {
+	var v types.Volume
+	var status string
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, size_mib, mount_path, status FROM volumes WHERE id = $1`, id).
+		Scan(&v.ID, &v.ProjectID, &v.Name, &v.SizeMiB, &v.Path, &status)
+	if err != nil {
+		return nil, false
+	}
+	return &v, true
+}
+
+func (s *Store) DeleteVolume(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM volumes WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete volume %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+func (s *Store) ResizeVolume(id string, sizeMiB int) bool {
+	res, err := s.pool.Exec(context.Background(),
+		`UPDATE volumes SET size_mib = $2 WHERE id = $1`, id, sizeMiB)
+	if err != nil {
+		log.Printf("store: resize volume %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Alerts ----
+
+func (s *Store) PutAlert(al *types.Alert) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO alerts (id, project_id, name, metric, threshold, op, cooldown_s, silenced)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, metric=EXCLUDED.metric,
+		threshold=EXCLUDED.threshold, op=EXCLUDED.op, cooldown_s=EXCLUDED.cooldown_s, silenced=EXCLUDED.silenced`,
+		al.ID, nullStr(al.ProjectID), al.Name, al.Metric, al.Threshold, al.Op, al.CooldownS, al.Silenced)
+	if err != nil {
+		log.Printf("store: put alert %s: %v", al.ID, err)
+	}
+}
+
+func (s *Store) ListAlerts(projectID string) []*types.Alert {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, metric, threshold, op, cooldown_s, silenced FROM alerts
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list alerts: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Alert, 0)
+	for rows.Next() {
+		var al types.Alert
+		if err := rows.Scan(&al.ID, &al.ProjectID, &al.Name, &al.Metric, &al.Threshold, &al.Op, &al.CooldownS, &al.Silenced); err != nil {
+			continue
+		}
+		out = append(out, &al)
+	}
+	return out
+}
+
+func (s *Store) GetAlert(id string) (*types.Alert, bool) {
+	var al types.Alert
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, metric, threshold, op, cooldown_s, silenced FROM alerts WHERE id = $1`, id).
+		Scan(&al.ID, &al.ProjectID, &al.Name, &al.Metric, &al.Threshold, &al.Op, &al.CooldownS, &al.Silenced)
+	if err != nil {
+		return nil, false
+	}
+	return &al, true
+}
+
+func (s *Store) DeleteAlert(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM alerts WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete alert %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+func (s *Store) SetAlertSilenced(id string, silenced bool) bool {
+	res, err := s.pool.Exec(context.Background(), `UPDATE alerts SET silenced = $2 WHERE id = $1`, id, silenced)
+	if err != nil {
+		log.Printf("store: silence alert %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Hooks ----
+
+func (s *Store) PutHook(h *types.Hook) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO hooks (id, project_id, name, url, events, active)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, url=EXCLUDED.url,
+		events=EXCLUDED.events, active=EXCLUDED.active`,
+		h.ID, nullStr(h.ProjectID), h.Name, h.URL, h.Events, h.Active)
+	if err != nil {
+		log.Printf("store: put hook %s: %v", h.ID, err)
+	}
+}
+
+func (s *Store) ListHooks(projectID string) []*types.Hook {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, url, events, active FROM hooks
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list hooks: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Hook, 0)
+	for rows.Next() {
+		var h types.Hook
+		if err := rows.Scan(&h.ID, &h.ProjectID, &h.Name, &h.URL, &h.Events, &h.Active); err != nil {
+			continue
+		}
+		out = append(out, &h)
+	}
+	return out
+}
+
+func (s *Store) DeleteHook(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM hooks WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete hook %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Crons ----
+
+func (s *Store) PutCron(c *types.Cron) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO crons (id, project_id, name, schedule, job_image, active)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, schedule=EXCLUDED.schedule,
+		job_image=EXCLUDED.job_image, active=EXCLUDED.active`,
+		c.ID, nullStr(c.ProjectID), c.Name, c.Schedule, c.JobImage, c.Active)
+	if err != nil {
+		log.Printf("store: put cron %s: %v", c.ID, err)
+	}
+}
+
+func (s *Store) ListCrons(projectID string) []*types.Cron {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, schedule, job_image, active, last_run_at FROM crons
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list crons: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Cron, 0)
+	for rows.Next() {
+		var c types.Cron
+		var lr *time.Time
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Name, &c.Schedule, &c.JobImage, &c.Active, &lr); err != nil {
+			continue
+		}
+		c.LastRun = lr
+		out = append(out, &c)
+	}
+	return out
+}
+
+func (s *Store) GetCron(id string) (*types.Cron, bool) {
+	var c types.Cron
+	var lr *time.Time
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, schedule, job_image, active, last_run_at FROM crons WHERE id = $1`, id).
+		Scan(&c.ID, &c.ProjectID, &c.Name, &c.Schedule, &c.JobImage, &c.Active, &lr)
+	if err != nil {
+		return nil, false
+	}
+	c.LastRun = lr
+	return &c, true
+}
+
+func (s *Store) DeleteCron(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM crons WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete cron %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+func (s *Store) TouchCron(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `UPDATE crons SET last_run_at = now() WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: touch cron %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Drains ----
+
+func (s *Store) PutDrain(d *types.Drain) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO drains (id, project_id, name, endpoint, kind, active)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, endpoint=EXCLUDED.endpoint,
+		kind=EXCLUDED.kind, active=EXCLUDED.active`,
+		d.ID, nullStr(d.ProjectID), d.Name, d.Endpoint, d.Kind, d.Active)
+	if err != nil {
+		log.Printf("store: put drain %s: %v", d.ID, err)
+	}
+}
+
+func (s *Store) ListDrains(projectID string) []*types.Drain {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, endpoint, kind, active FROM drains
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list drains: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Drain, 0)
+	for rows.Next() {
+		var d types.Drain
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Name, &d.Endpoint, &d.Kind, &d.Active); err != nil {
+			continue
+		}
+		out = append(out, &d)
+	}
+	return out
+}
+
+func (s *Store) DeleteDrain(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM drains WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete drain %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Redirects ----
+
+func (s *Store) PutRedirect(r *types.Redirect) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO redirects (id, project_id, source, target, permanent)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (id) DO UPDATE SET source=EXCLUDED.source, target=EXCLUDED.target,
+		permanent=EXCLUDED.permanent`,
+		r.ID, nullStr(r.ProjectID), r.Source, r.Target, r.Permanent)
+	if err != nil {
+		log.Printf("store: put redirect %s: %v", r.ID, err)
+	}
+}
+
+func (s *Store) ListRedirects(projectID string) []*types.Redirect {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), source, target, permanent FROM redirects
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list redirects: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Redirect, 0)
+	for rows.Next() {
+		var r types.Redirect
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Source, &r.Target, &r.Permanent); err != nil {
+			continue
+		}
+		out = append(out, &r)
+	}
+	return out
+}
+
+func (s *Store) DeleteRedirect(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM redirects WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete redirect %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Firewall ----
+
+func (s *Store) PutFirewallRule(r *types.FirewallRule) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO firewall_rules (id, project_id, direction, action, proto, ports, source, priority, active)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		ON CONFLICT (id) DO UPDATE SET direction=EXCLUDED.direction, action=EXCLUDED.action,
+		proto=EXCLUDED.proto, ports=EXCLUDED.ports, source=EXCLUDED.source,
+		priority=EXCLUDED.priority, active=EXCLUDED.active`,
+		r.ID, nullStr(r.ProjectID), r.Direction, r.Action, r.Proto, r.Ports, r.Source, r.Priority, r.Active)
+	if err != nil {
+		log.Printf("store: put firewall rule %s: %v", r.ID, err)
+	}
+}
+
+func (s *Store) ListFirewallRules(projectID string) []*types.FirewallRule {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), direction, action, proto, ports, source, priority, active
+		 FROM firewall_rules WHERE project_id = $1 ORDER BY priority`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list firewall rules: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.FirewallRule, 0)
+	for rows.Next() {
+		var r types.FirewallRule
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.Direction, &r.Action, &r.Proto, &r.Ports, &r.Source, &r.Priority, &r.Active); err != nil {
+			continue
+		}
+		out = append(out, &r)
+	}
+	return out
+}
+
+func (s *Store) GetFirewallRule(id string) (*types.FirewallRule, bool) {
+	var r types.FirewallRule
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(project_id,''), direction, action, proto, ports, source, priority, active
+		 FROM firewall_rules WHERE id = $1`, id).
+		Scan(&r.ID, &r.ProjectID, &r.Direction, &r.Action, &r.Proto, &r.Ports, &r.Source, &r.Priority, &r.Active)
+	if err != nil {
+		return nil, false
+	}
+	return &r, true
+}
+
+func (s *Store) DeleteFirewallRule(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM firewall_rules WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete firewall rule %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Environments ----
+
+func (s *Store) PutEnvironment(e *types.Environment) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO environments (id, project_id, name, branch, url, env_domain)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (project_id, name) DO UPDATE SET branch=EXCLUDED.branch,
+		url=EXCLUDED.url, env_domain=EXCLUDED.env_domain`,
+		e.ID, nullStr(e.ProjectID), e.Name, e.Branch, e.URL, e.EnvDomain)
+	if err != nil {
+		log.Printf("store: put environment %s: %v", e.ID, err)
+	}
+}
+
+func (s *Store) ListEnvironments(projectID string) []*types.Environment {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, branch, url, env_domain FROM environments
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list environments: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Environment, 0)
+	for rows.Next() {
+		var e types.Environment
+		if err := rows.Scan(&e.ID, &e.ProjectID, &e.Name, &e.Branch, &e.URL, &e.EnvDomain); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out
+}
+
+func (s *Store) GetEnvironment(id string) (*types.Environment, bool) {
+	var e types.Environment
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, branch, url, env_domain FROM environments WHERE id = $1`, id).
+		Scan(&e.ID, &e.ProjectID, &e.Name, &e.Branch, &e.URL, &e.EnvDomain)
+	if err != nil {
+		return nil, false
+	}
+	return &e, true
+}
+
+func (s *Store) DeleteEnvironment(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM environments WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete environment %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Project settings (per-section JSON) ----
+
+func (s *Store) PutProjectSettings(projectID, section string, data map[string]any) {
+	b, _ := json.Marshal(data)
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO project_settings (project_id, section, data, updated_at)
+		VALUES ($1,$2,$3, now())
+		ON CONFLICT (project_id, section) DO UPDATE SET data=EXCLUDED.data, updated_at=now()`,
+		projectID, section, b)
+	if err != nil {
+		log.Printf("store: put project settings %s/%s: %v", projectID, section, err)
+	}
+}
+
+func (s *Store) GetProjectSettings(projectID, section string) map[string]any {
+	var b []byte
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT data FROM project_settings WHERE project_id = $1 AND section = $2`, projectID, section).
+		Scan(&b)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	return m
+}
+
+// ---- Project members (Vercel team parity) ----
+
+func (s *Store) PutProjectMember(m *types.ProjectMember) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO project_members (project_id, user_id, role, invited)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (project_id, user_id) DO UPDATE SET role=EXCLUDED.role, invited=EXCLUDED.invited`,
+		m.ProjectID, m.UserID, m.Role, m.Invited)
+	if err != nil {
+		log.Printf("store: put project member %s/%s: %v", m.ProjectID, m.UserID, err)
+	}
+}
+
+func (s *Store) ListProjectMembers(projectID string) []*types.ProjectMember {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT project_id, user_id, role, invited, created_at FROM project_members
+		 WHERE project_id = $1 ORDER BY created_at`, projectID)
+	if err != nil {
+		log.Printf("store: list project members: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.ProjectMember, 0)
+	for rows.Next() {
+		var m types.ProjectMember
+		if err := rows.Scan(&m.ProjectID, &m.UserID, &m.Role, &m.Invited, &m.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, &m)
+	}
+	return out
+}
+
+func (s *Store) DeleteProjectMember(projectID, userID string) bool {
+	res, err := s.pool.Exec(context.Background(),
+		`DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`, projectID, userID)
+	if err != nil {
+		log.Printf("store: delete project member %s/%s: %v", projectID, userID, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Builds (git-based build → OCI → microVM) ----
+
+func (s *Store) PutBuild(b *types.Build) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO builds (id, project_id, git_url, branch, build_status, image, log)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (id) DO UPDATE SET git_url=EXCLUDED.git_url, branch=EXCLUDED.branch,
+		build_status=EXCLUDED.build_status, image=EXCLUDED.image, log=EXCLUDED.log`,
+		b.ID, nullStr(b.ProjectID), b.GitURL, b.Branch, b.BuildStatus, b.Image, b.Log)
+	if err != nil {
+		log.Printf("store: put build %s: %v", b.ID, err)
+	}
+}
+
+func (s *Store) ListBuilds(projectID string) []*types.Build {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), git_url, branch, build_status, image, log FROM builds
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list builds: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Build, 0)
+	for rows.Next() {
+		var b types.Build
+		if err := rows.Scan(&b.ID, &b.ProjectID, &b.GitURL, &b.Branch, &b.BuildStatus, &b.Image, &b.Log); err != nil {
+			continue
+		}
+		out = append(out, &b)
+	}
+	return out
+}
+
+func (s *Store) GetBuild(id string) (*types.Build, bool) {
+	var b types.Build
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(project_id,''), git_url, branch, build_status, image, log FROM builds WHERE id = $1`, id).
+		Scan(&b.ID, &b.ProjectID, &b.GitURL, &b.Branch, &b.BuildStatus, &b.Image, &b.Log)
+	if err != nil {
+		return nil, false
+	}
+	return &b, true
+}
+
+func (s *Store) DeleteBuild(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM builds WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete build %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ---- Networks (docker-ecosystem parity) ----
+
+func (s *Store) PutNetwork(n *types.Network) {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO networks (id, project_id, name, cidr, driver)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (project_id, name) DO UPDATE SET cidr=EXCLUDED.cidr, driver=EXCLUDED.driver`,
+		n.ID, nullStr(n.ProjectID), n.Name, n.CIDR, n.Driver)
+	if err != nil {
+		log.Printf("store: put network %s: %v", n.ID, err)
+	}
+}
+
+func (s *Store) ListNetworks(projectID string) []*types.Network {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, cidr, driver FROM networks
+		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
+	if err != nil {
+		log.Printf("store: list networks: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Network, 0)
+	for rows.Next() {
+		var n types.Network
+		if err := rows.Scan(&n.ID, &n.ProjectID, &n.Name, &n.CIDR, &n.Driver); err != nil {
+			continue
+		}
+		out = append(out, &n)
+	}
+	return out
+}
+
+func (s *Store) DeleteNetwork(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM networks WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete network %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// nullStr converts "" to NULL for nullable columns.
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// statusOf extracts a volume status string (kept for the volume table's status column).
+func statusOf(v *types.Volume) string {
+	if v.Path == "" {
+		return "provisioning"
+	}
+	return "mounted"
 }
 
 var _ = pgx.ErrNoRows // keep pgx imported for future raw queries

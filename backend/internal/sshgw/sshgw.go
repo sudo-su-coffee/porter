@@ -75,7 +75,8 @@ func (g *Gateway) authorizeCert(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.
 		!g.signedByCA(cert) {
 		return nil, fmt.Errorf("certificate not signed by gateway CA")
 	}
-	if time.Now().After(cert.ValidBefore) || time.Now().Before(cert.ValidAfter) {
+	now := uint64(time.Now().Unix())
+	if now > cert.ValidBefore || now < cert.ValidAfter {
 		return nil, fmt.Errorf("certificate expired or not yet valid")
 	}
 	return &ssh.Permissions{Extensions: map[string]string{"vm": conn.User()}}, nil
@@ -108,10 +109,10 @@ func (g *Gateway) SignCertificate(pubKey []byte, vmID string) ([]byte, error) {
 		Serial:      uint64(time.Now().UnixNano()),
 		CertType:    ssh.UserCert,
 		KeyId:       vmID,
-		ValidAfter:  uint64(time.Now().Add(-time.Minute).Unix()),
-		ValidBefore: uint64(time.Now().Add(10 * time.Minute).Unix()),
-		Principals:  []string{vmID},
-		SignatureKey: caPub,
+		ValidAfter:      uint64(time.Now().Add(-time.Minute).Unix()),
+		ValidBefore:     uint64(time.Now().Add(10 * time.Minute).Unix()),
+		ValidPrincipals: []string{vmID},
+		SignatureKey:    caPub,
 	}
 	if err := cert.SignCert(rand.Reader, g.hostKey); err != nil {
 		return nil, fmt.Errorf("sign cert: %w", err)

@@ -11,15 +11,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"porter/internal/event"
-	"porter/internal/imagecatalog"
 	"porter/internal/netmgr"
 	"porter/internal/store"
 	"porter/internal/types"
@@ -58,8 +56,17 @@ type API struct {
 	version    string
 	logger     *log.Logger
 
+	// customImagesDir is where user-uploaded microVM .zip images unpack to.
+	// Set via SetCustomImagesDir (wired from config in main.go).
+	customImagesDir string
+
 	// CSRF secret – must be set before routes are registered.
 	csrfToken string
+
+	// Rate limiting (per client IP per minute); 0 disables.
+	rateLimit int
+	rateMu    sync.Mutex
+	rate      map[string]rateEntry
 
 	mu sync.Mutex
 	// In-process CRUD stores for settings-type endpoints (not persisted in v0.1).
@@ -90,6 +97,7 @@ func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManage
 		version:      version,
 		logger:       log.New(log.Writer(), "api: ", log.LstdFlags),
 		csrfToken:    generateRandomToken(32),
+		rate:         map[string]rateEntry{},
 		settings:     map[string]map[string]any{},
 		crons:        map[string][]any{},
 		alerts:       map[string][]any{},
@@ -104,6 +112,41 @@ func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManage
 	return api
 }
 
+// SetCustomImagesDir configures the directory user-uploaded microVM images
+// are unpacked into (must be set before /images/custom is used).
+func (a *API) SetCustomImagesDir(dir string) { a.customImagesDir = dir }
+
+// SetRateLimit configures the per-IP request cap (0 disables).
+func (a *API) SetRateLimit(n int) { a.rateLimit = n }
+
+// rateEntry is a sliding one-minute token bucket per client IP.
+type rateEntry struct {
+	count int
+	reset time.Time
+}
+
+// allowRate returns true if the client is under the per-minute cap.
+func (a *API) allowRate(client string) bool {
+	ip := client
+	if h, _, err := net.SplitHostPort(client); err == nil {
+		ip = h
+	}
+	a.rateMu.Lock()
+	defer a.rateMu.Unlock()
+	now := time.Now()
+	e, ok := a.rate[ip]
+	if !ok || now.After(e.reset) {
+		a.rate[ip] = rateEntry{count: 1, reset: now.Add(time.Minute)}
+		return true
+	}
+	e.count++
+	if e.count > a.rateLimit {
+		return false
+	}
+	a.rate[ip] = e
+	return true
+}
+
 // generateRandomToken creates a hex-encoded random string of length n bytes.
 func generateRandomToken(n int) string {
 	b := make([]byte, n)
@@ -111,6 +154,52 @@ func generateRandomToken(n int) string {
 		panic("failed to generate random csrf token: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// writeJSON marshals v and writes it to w with Content-Type application/json.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if v == nil {
+		return
+	}
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("api: writeJSON encode error: %v", err)
+	}
+}
+
+// writeError writes a uniform {"error": msg} JSON body with the given status.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// readJSON decodes a JSON request body into v.
+func readJSON(r *http.Request, v any) error {
+	defer r.Body.Close()
+	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// bearerToken extracts the "Authorization: Bearer <token>" credential, or "".
+func bearerToken(r *http.Request) string {
+	parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		return parts[1]
+	}
+	return r.URL.Query().Get("access_token")
+}
+
+// constantTimeEqual compares two strings in constant time (length-guarded).
+func constantTimeEqual(a, b string) bool {
+	// Short-circuit on length without leaking content timing for mismatched lengths.
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// handleHealth is the unauthenticated liveness endpoint.
+func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": a.version})
 }
 
 // orgIDFromHeader returns the org ID from the X-Porter-Org-Id header, or the first org as fallback.
@@ -144,6 +233,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// ========== Auth & Users ==========
 	mux.HandleFunc("POST /auth/login", a.handleLogin)
 	mux.HandleFunc("POST /auth/logout", a.handleLogout)
+
 	mux.HandleFunc("POST /auth/signup", a.handleSignup)
 	mux.HandleFunc("POST /auth/password/forgot", a.handlePasswordForgot)
 	mux.HandleFunc("POST /auth/password/reset", a.handlePasswordReset)
@@ -251,18 +341,6 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/ssh-cert", a.auth(a.handleSSHCert))
 	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/exec", a.auth(a.handleReplicaExec))
 	mux.HandleFunc("GET /projects/{projectId}/replicas/{n}/console", a.auth(a.handleReplicaConsole))
-
-	// ========== Global Replicas ==========
-	mux.HandleFunc("GET /replicas", a.auth(a.handleGlobalReplicas))
-	mux.HandleFunc("GET /replicas/{replicaId}", a.auth(a.handleGlobalReplica))
-	mux.HandleFunc("GET /replicas/{replicaId}/logs", a.auth(a.handleReplicaLogsByID))
-	mux.HandleFunc("GET /replicas/{replicaId}/metrics", a.auth(a.handleReplicaMetricsByID))
-	mux.HandleFunc("GET /replicas/{replicaId}/traffic", a.auth(a.handleReplicaTrafficByID))
-	mux.HandleFunc("GET /replicas/{replicaId}/health", a.auth(a.handleReplicaHealthByID))
-	mux.HandleFunc("GET /replicas/{replicaId}/ssh-info", a.auth(a.handleSSHInfoByID))
-	mux.HandleFunc("POST /replicas/{replicaId}/ssh-cert", a.auth(a.handleSSHCertByID))
-	mux.HandleFunc("POST /replicas/{replicaId}/exec", a.auth(a.handleReplicaExecByID))
-	mux.HandleFunc("GET /replicas/{replicaId}/console", a.auth(a.handleReplicaConsoleByID))
 
 	// ========== Deployments ==========
 	mux.HandleFunc("GET /projects/{projectId}/deployments", a.auth(a.handleListDeployments))
@@ -383,6 +461,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{projectId}/analytics/invocations", a.auth(a.handleAnalyticsInvocations))
 	mux.HandleFunc("GET /projects/{projectId}/observability/web-vitals", a.auth(a.handleWebVitals))
 	mux.HandleFunc("GET /projects/{projectId}/observability/web-vitals/timeseries", a.auth(a.handleWebVitalsTimeseries))
+
 	// LCP/CLS/FID aliases
 	mux.HandleFunc("GET /projects/{projectId}/observability/lcp", a.auth(a.handleAnalyticsUsage))
 	mux.HandleFunc("GET /projects/{projectId}/observability/cls", a.auth(a.handleAnalyticsUsage))
@@ -415,6 +494,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	// ========== Images / Registry ==========
 	mux.HandleFunc("GET /images", a.auth(a.handleListImages))
+	mux.HandleFunc("POST /images/custom", a.auth(a.handleUploadCustomImage))
 	mux.HandleFunc("GET /images/search", a.auth(a.handleImageSearch))
 	mux.HandleFunc("GET /images/{reference}", a.auth(a.handleGetImage))
 	mux.HandleFunc("DELETE /images/{reference}", a.auth(a.handleDeleteImage))
@@ -443,6 +523,25 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /projects/{projectId}/export", a.auth(a.handleExportProject))
 	mux.HandleFunc("POST /projects/{projectId}/import", a.auth(a.handleImportProject))
 	mux.HandleFunc("PUT /projects/{projectId}/ssh", a.auth(a.handleSSHToggle))
+
+	// ========== Git Builds & GitOps (self-hosted Vercel vision) ==========
+	mux.HandleFunc("POST /projects/{projectId}/git/import", a.auth(a.handleGitImport))
+	mux.HandleFunc("POST /projects/{projectId}/deployments/git", a.auth(a.handleDeployGit))
+	mux.HandleFunc("POST /projects/{projectId}/builds", a.auth(a.handleListBuilds))
+	mux.HandleFunc("POST /projects/{projectId}/builds/run", a.auth(a.handleCreateBuild))
+	mux.HandleFunc("GET /projects/{projectId}/builds/{buildId}/logs", a.auth(a.handleBuildLogs))
+	mux.HandleFunc("GET /projects/{projectId}/git/branches", a.auth(a.handleGitBranches))
+	mux.HandleFunc("GET /projects/{projectId}/rollouts", a.auth(a.handleListRollouts))
+
+	// ========== Docker-ecosystem parity: services & networks ==========
+	mux.HandleFunc("GET /projects/{projectId}/services", a.auth(a.handleListServices))
+	mux.HandleFunc("GET /projects/{projectId}/services/{serviceName}", a.auth(a.handleGetService))
+	mux.HandleFunc("POST /projects/{projectId}/services/{serviceName}/scale", a.auth(a.handleScaleService))
+	mux.HandleFunc("GET /projects/{projectId}/networks", a.auth(a.handleListNetworks))
+	mux.HandleFunc("POST /projects/{projectId}/networks", a.auth(a.handleCreateNetwork))
+
+	// ========== ML / serving image catalog ==========
+	mux.HandleFunc("GET /images/ml", a.auth(a.handleImageSearch)) // catalog filter for ML images
 }
 
 // ----------------------------------------------------------------------------
@@ -460,6 +559,11 @@ func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 		// 1. Check bearer token
 		if a.token == "" || !constantTimeEqual(a.token, bearerToken(r)) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		// 1b. Optional per-IP rate limit on auth'd requests.
+		if a.rateLimit > 0 && !a.allowRate(r.RemoteAddr) {
+			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
 		// 2. CSRF check for mutable methods (except the CSRF endpoint itself and auth)
@@ -762,6 +866,7 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		Env:          req.Env,
 		CreatedAt:    time.Now(),
 	}
+	a.applyImageManifest(vm)
 	a.store.PutVM(vm)
 	if proj.VMIDs == nil {
 		proj.VMIDs = []string{}
@@ -771,6 +876,29 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		go func(c types.VM) { _ = a.vmm.Boot(context.Background(), &c) }(*vm)
 	}
 	a.store.PutProject(proj)
+}
+
+// applyImageManifest fills VM fields from a custom (user-uploaded microVM)
+// golden image: rootfs + kernel host paths and the default vCPU/memory spec.
+// OCI image references are left untouched (containerd boots them).
+func (a *API) applyImageManifest(vm *types.VM) {
+	if vm == nil || !strings.HasPrefix(vm.Image, "custom://") {
+		return
+	}
+	ref := strings.TrimPrefix(vm.Image, "custom://")
+	for _, gi := range a.store.ListGoldenImages() {
+		if gi.Image == "custom://"+ref || gi.Name == ref {
+			vm.RootfsPath = gi.Rootfs
+			vm.Kernel = gi.Kernel
+			if vm.VCPUs == 0 {
+				vm.VCPUs = gi.VCPUs
+			}
+			if vm.MemMiB == 0 {
+				vm.MemMiB = gi.MemMiB
+			}
+			return
+		}
+	}
 }
 
 func (a *API) handleCreateComposeProject(w http.ResponseWriter, r *http.Request) {

@@ -22,7 +22,6 @@ import (
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
-	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"porter/internal/types"
 )
@@ -138,26 +137,24 @@ func (m *Manager) Boot(ctx context.Context, vm *types.VM) error {
 
 	// 2. Create the container with the firecracker shim runtime.
 	ctrName := "vm-" + vm.ID
-	opts := []containerd.NewContainerOpts{
+	specOpts := []oci.SpecOpts{
+		oci.WithImageConfig(image),
+		oci.WithEnv(envMap(vm.Env)),
+	}
+	ctr, err := cl.NewContainer(ctx, ctrName,
 		containerd.WithImage(image),
 		containerd.WithRuntime("aws.firecracker", nil),
 		containerd.WithSnapshotter(m.cfg.Snapshotter),
 		containerd.WithNewSnapshot(m.cfg.Snapshotter, image),
-		oci.WithEnv(envMap(vm.Env)),
-	}
-	if vm.VCPUs > 0 || vm.MemMiB > 0 {
-		opts = append(opts, oci.WithResources(&specs.LinuxResources{
-			CPU:    &specs.LinuxCPU{Quota: int64Ptr(int64(vm.VCPUs) * 100000)},
-			Memory: &specs.LinuxMemory{Limit: int64Ptr(int64(vm.MemMiB) * 1024 * 1024)},
-		}))
-	}
-	ctr, err := cl.NewContainer(ctx, ctrName, opts...)
+		containerd.WithNewSpec(specOpts...),
+	)
 	if err != nil {
 		return m.fail(vm, fmt.Errorf("create container: %w", err))
 	}
 
-	// 3. Task + Start.
-	task, err := ctr.NewTask(ctx, cio.Discard)
+	// 3. Task + Start. Direct a FIFO IO pair to /dev/null for now (real
+	// logs flow through the store/API layer; the shim attaches its own).
+	task, err := ctr.NewTask(ctx, cio.NewCreator(cio.WithStdio))
 	if err != nil {
 		_ = ctr.Delete(ctx, containerd.WithSnapshotCleanup)
 		return m.fail(vm, fmt.Errorf("create task: %w", err))
@@ -195,18 +192,22 @@ func (m *Manager) fail(vm *types.VM, err error) error {
 
 // watchTask listens for the task to exit and records crashes.
 func (m *Manager) watchTask(ctx context.Context, vmID string, task containerd.Task) {
-	exitCh, errCh := task.Wait(ctx)
+	exitCh, waitErr := task.Wait(ctx)
+	if waitErr != nil {
+		return
+	}
 	select {
-	case <-exitCh:
+	case exit := <-exitCh:
 		cur, ok := m.store.GetVM(vmID)
 		if !ok {
 			return
 		}
 		cur.State = types.StateStopped
-		cur.Crashed = true
+		if exit.ExitCode() != 0 {
+			cur.Crashed = true
+		}
 		m.store.PutVM(cur)
 		m.publish("vm.state", map[string]any{"vm_id": vmID, "state": cur.State, "health_status": cur.HealthStatus})
-	case <-errCh:
 	case <-ctx.Done():
 	}
 }
@@ -310,7 +311,6 @@ func envMap(env map[string]string) []string {
 	return out
 }
 
-func int64Ptr(v int64) *int64 { return &v }
 
 // ensureLogDir creates the per-VM log dir if needed (used by callers that
 // attach real stdio files).

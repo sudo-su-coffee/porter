@@ -6,22 +6,34 @@
 package gateway
 
 import (
+	"context"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"porter/internal/types"
 )
 
-// Store is the narrow persistence surface the gateway needs.
+// Store is the narrow persistence surface the gateway needs. AddTraffic lets
+// the dashboard's GET /traffic endpoints (which read store.ListTraffic) see
+// live proxied requests, not just the in-memory ring.
 type Store interface {
 	GetVM(id string) (*types.VM, bool)
 	ListVMs() []*types.VM
 	ListDomains(vmID string) []*types.Domain
+	AddTraffic(vmID string, e *types.TrafficEntry)
+}
+
+// DNSResolver resolves <svc>.<project>.local hostnames to VM IPs; wired from
+// the dns package when enabled.
+type DNSResolver interface {
+	LookupIP(ctx context.Context, host string) ([]net.IP, error)
 }
 
 // TrafficRing is a bounded, in-memory per-VM request log.
@@ -69,24 +81,30 @@ type Gateway struct {
 	store  Store
 	ring   *TrafficRing
 	logger *log.Logger
+	dns    DNSResolver
+	rr     atomic.Uint64 // round-robin cursor across the healthy replica pool
 }
 
 // NewGateway builds the gateway with its in-memory traffic ring.
 func NewGateway(store Store) *Gateway {
 	return &Gateway{
-		store: store,
-		ring:  NewTrafficRing(500),
+		store:  store,
+		ring:   NewTrafficRing(500),
 		logger: log.New(log.Writer(), "gateway: ", log.LstdFlags),
 	}
 }
 
-// Ring exposes the traffic ring (the API's GET /vms/{id}/traffic reads it).
+// Ring exposes the traffic ring (fast path; the store is the dashboard source).
 func (g *Gateway) Ring() *TrafficRing {
 	return g.ring
 }
 
+// SetDNS attaches the .local resolver so hostnames that don't match a domain
+// record can still be routed to the right replica pool.
+func (g *Gateway) SetDNS(r DNSResolver) { g.dns = r }
+
 // ServeHTTP implements http.Handler: resolve the Host header to a VM backend
-// and reverse-proxy, then record a traffic entry.
+// and reverse-proxy, then record a traffic entry to the ring AND the store.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := strings.Split(r.Host, ":")[0]
 
@@ -95,31 +113,37 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no healthy backend for "+host, http.StatusServiceUnavailable)
 		return
 	}
-	vm := vms[0]
+	// Round-robin across the healthy replica pool (least-connections can be
+	// layered on later; round-robin is correct and stateless).
+	vm := vms[int(g.rr.Add(1))%len(vms)]
 	target, ok := targetAddress(vm)
 	if !ok {
 		http.Error(w, "vm has no address", http.StatusServiceUnavailable)
 		return
 	}
 
+	rw := NewResponseWriter(w)
 	start := time.Now()
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(rw, r)
 	dur := time.Since(start).Milliseconds()
 
-	g.ring.Add(vm.ID, &types.TrafficEntry{
+	entry := &types.TrafficEntry{
 		Timestamp:  start,
 		Method:     r.Method,
 		Host:       r.Host,
 		Path:       r.URL.Path,
-		Status:     statusCode(w),
+		Status:     statusCode(rw),
 		DurationMS: int(dur),
 		RemoteIP:   r.RemoteAddr,
-	})
+	}
+	g.ring.Add(vm.ID, entry)
+	g.store.AddTraffic(vm.ID, entry)
 }
 
 // backendsFor finds healthy VMs that serve the given domain: direct match on
-// a VM's domain records, then fall back to any running VM (dev convenience).
+// a VM's domain records, then a DNS-resolution pass for *.local service names,
+// then fall back to any running VM (dev convenience).
 func (g *Gateway) backendsFor(host string) []*types.VM {
 	// Domains are attached to VMs; match any domain record equal to host.
 	for _, vm := range g.store.ListVMs() {
@@ -129,6 +153,22 @@ func (g *Gateway) backendsFor(host string) []*types.VM {
 		for _, d := range g.store.ListDomains(vm.ID) {
 			if strings.EqualFold(d.Domain, host) {
 				return []*types.VM{vm}
+			}
+		}
+	}
+	// <svc>.<project>.local — resolve through the attached dns resolver and
+	// pick the healthy VM whose IP matches.
+	if g.dns != nil && strings.HasSuffix(host, ".local") {
+		if ips, err := g.dns.LookupIP(context.Background(), host); err == nil {
+			for _, vm := range g.store.ListVMs() {
+				if !isHealthy(vm) {
+					continue
+				}
+				for _, ip := range ips {
+					if vm.IPAddress != "" && vm.IPAddress == ip.String() {
+						return []*types.VM{vm}
+					}
+				}
 			}
 		}
 	}

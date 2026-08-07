@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // Config holds every setting Porter needs to start: server/network
@@ -23,12 +24,11 @@ type Config struct {
 
 	// Linux-host VM wiring. Porter boots OCI images through containerd +
 	// the `aws.firecracker` shim; kernel/rootfs/jailer live in the host's
-	// /etc/containerd/firecracker-runtime.json (see deploy/host/).
+	// /etc/containerd/firecracker-runtime.json (see backend/deploy/README.md).
 	ContainerdSocket string // e.g. /run/containerd/containerd.sock
 	Snapshotter      string // containerd snapshotter to pull/unpack into (devmapper on a real host)
 	Namespace        string // containerd namespace, e.g. "porter"
 	LogsDir          string // where per-VM stdio logs land, e.g. /var/log/porter
-	Simulate         bool   // fake the lifecycle for dev/demo (no containerd needed)
 
 	// Kernel/rootfs/firecracker are consumed by the host (the shim's
 	// /etc/containerd/firecracker-runtime.json), not by Porter at runtime;
@@ -40,6 +40,23 @@ type Config struct {
 
 	ImagesDir string // directory of vms/images/*.json image-catalog manifests
 
+	// Direct-Firecracker (bare microVM) settings. CustomImagesDir is where
+	// user-uploaded .zip microVM images (rootfs.ext4 + vmlinux) are unpacked.
+	CustomImagesDir string // e.g. "vms/custom"
+
+	// RateLimitPerMin caps control-plane requests per client IP per minute
+	// (0 disables). Applied to auth'd routes as a token bucket.
+	RateLimitPerMin int
+
+	// Optional control-plane services wired into `porter server`. All default
+	// to off so a bare bootstrap keeps working with zero extra listeners.
+	GatewayEnabled    bool   // host-routing reverse proxy + traffic logger
+	GatewayListenAddr string // e.g. ":80" — faces *.local / project domains
+	DNSEnabled        bool   // resolve <svc>.<project>.local for the gateway
+	HealthEnabled     bool   // healthcheck + auto-replace of unhealthy VMs
+	SSHEnabled        bool   // SSH gateway (needs a task.Exec bridge; off by default)
+	SSHListenAddr     string
+
 	AdminUsername string
 	AdminPassword string
 }
@@ -50,15 +67,19 @@ type Config struct {
 // config.
 func LoadConfig(path string) (*Config, error) {
 	cfg := &Config{
-		ListenAddr:       ":8080",
-		DatabaseURL:      "postgres://porter:porter@localhost:5432/porter?sslmode=disable",
-		AutoMigrate:      true,
-		ContainerdSocket: "/run/containerd/containerd.sock",
-		Snapshotter:      "devmapper",
-		Namespace:        "porter",
-		LogsDir:          "/var/log/porter",
-		ImagesDir:        "vms/images",
-		AdminUsername:    "admin",
+		ListenAddr:        ":8080",
+		DatabaseURL:       "postgres://porter:porter@localhost:5432/porter?sslmode=disable",
+		AutoMigrate:       true,
+		ContainerdSocket:  "/run/containerd/containerd.sock",
+		Snapshotter:       "devmapper",
+		Namespace:         "porter",
+		LogsDir:           "/var/log/porter",
+		ImagesDir:         "vms/images",
+		CustomImagesDir:   "vms/custom",
+		FirecrackerBin:    "firecracker",
+		GatewayListenAddr: ":80",
+		SSHListenAddr:     ":2222",
+		AdminUsername:     "admin",
 	}
 
 	data, err := os.ReadFile(path)
@@ -80,8 +101,16 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Snapshotter = tomlGet(sections, "firecracker", "snapshotter", cfg.Snapshotter)
 		cfg.Namespace = tomlGet(sections, "firecracker", "namespace", cfg.Namespace)
 		cfg.LogsDir = tomlGet(sections, "firecracker", "logs_dir", cfg.LogsDir)
-		cfg.Simulate = tomlBool(sections, "firecracker", "simulate", cfg.Simulate)
 		cfg.ImagesDir = tomlGet(sections, "firecracker", "images_dir", cfg.ImagesDir)
+		cfg.CustomImagesDir = tomlGet(sections, "firecracker", "custom_images_dir", cfg.CustomImagesDir)
+		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
+		cfg.RateLimitPerMin = tomlInt(sections, "server", "rate_limit_per_min", cfg.RateLimitPerMin)
+		cfg.GatewayEnabled = tomlBool(sections, "gateway", "enabled", cfg.GatewayEnabled)
+		cfg.GatewayListenAddr = tomlGet(sections, "gateway", "listen_addr", cfg.GatewayListenAddr)
+		cfg.DNSEnabled = tomlBool(sections, "dns", "enabled", cfg.DNSEnabled)
+		cfg.HealthEnabled = tomlBool(sections, "health", "enabled", cfg.HealthEnabled)
+		cfg.SSHEnabled = tomlBool(sections, "ssh", "enabled", cfg.SSHEnabled)
+		cfg.SSHListenAddr = tomlGet(sections, "ssh", "listen_addr", cfg.SSHListenAddr)
 		cfg.AdminUsername = tomlGet(sections, "admin", "username", cfg.AdminUsername)
 		cfg.AdminPassword = tomlGet(sections, "admin", "password", cfg.AdminPassword)
 	case os.IsNotExist(err):
@@ -97,12 +126,21 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.APIToken = envOr("PORTER_API_TOKEN", cfg.APIToken)
 	cfg.DatabaseURL = envOr("PORTER_DATABASE_URL", cfg.DatabaseURL)
 	cfg.AutoMigrate = envBool("PORTER_AUTO_MIGRATE", cfg.AutoMigrate)
+	cfg.ContainerdSocket = envOr("PORTER_CONTAINERD_SOCKET", cfg.ContainerdSocket)
 	cfg.KernelImage = envOr("PORTER_KERNEL_IMAGE", cfg.KernelImage)
 	cfg.RootfsPath = envOr("PORTER_ROOTFS_PATH", cfg.RootfsPath)
 	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
 	cfg.LogsDir = envOr("PORTER_LOGS_DIR", cfg.LogsDir)
-	cfg.Simulate = envBool("PORTER_SIMULATE", cfg.Simulate)
 	cfg.ImagesDir = envOr("PORTER_IMAGES_DIR", cfg.ImagesDir)
+	cfg.CustomImagesDir = envOr("PORTER_CUSTOM_IMAGES_DIR", cfg.CustomImagesDir)
+	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
+	cfg.RateLimitPerMin = envInt("PORTER_RATE_LIMIT_PER_MIN", cfg.RateLimitPerMin)
+	cfg.GatewayEnabled = envBool("PORTER_GATEWAY_ENABLED", cfg.GatewayEnabled)
+	cfg.GatewayListenAddr = envOr("PORTER_GATEWAY_LISTEN_ADDR", cfg.GatewayListenAddr)
+	cfg.DNSEnabled = envBool("PORTER_DNS_ENABLED", cfg.DNSEnabled)
+	cfg.HealthEnabled = envBool("PORTER_HEALTH_ENABLED", cfg.HealthEnabled)
+	cfg.SSHEnabled = envBool("PORTER_SSH_ENABLED", cfg.SSHEnabled)
+	cfg.SSHListenAddr = envOr("PORTER_SSH_LISTEN_ADDR", cfg.SSHListenAddr)
 	cfg.AdminUsername = envOr("PORTER_ADMIN_USERNAME", cfg.AdminUsername)
 	cfg.AdminPassword = envOr("PORTER_ADMIN_PASSWORD", cfg.AdminPassword)
 
@@ -123,6 +161,32 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// tomlInt reads a [section] key as an int with a default (0 on parse error).
+func tomlInt(sections map[string]map[string]string, section, key string, def int) int {
+	v := tomlGet(sections, section, key, "")
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// envInt parses a PORTER_* int with a default.
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // envBool parses a PORTER_* boolean (true/1/yes) with a default.

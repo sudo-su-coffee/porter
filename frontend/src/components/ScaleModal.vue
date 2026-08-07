@@ -19,7 +19,7 @@ function onOverlayClick(e) {
 async function apply() {
   error.value = "";
   try {
-    await api(`/projects/${props.projectId}/services/${props.service}/scale`, {
+    await api(`/projects/${props.projectId}/scale`, {
       method: "PATCH",
       body: JSON.stringify({ replicas: parseInt(replicas.value, 10) }),
     });

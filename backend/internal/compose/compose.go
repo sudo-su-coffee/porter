@@ -186,7 +186,16 @@ func parsePort(item string) (types.Port, error) {
 	if err != nil {
 		return types.Port{}, fmt.Errorf("invalid port %q", item)
 	}
-	return types.Port{ContainerPort: p, Protocol: proto}, nil
+	
+	hostPort := 0
+	if len(parts) > 1 {
+		hp, err := strconv.Atoi(parts[0])
+		if err == nil {
+			hostPort = hp
+		}
+	}
+	
+	return types.Port{ContainerPort: p, HostPort: hostPort, Protocol: proto}, nil
 }
 
 func parseKV(item string) (string, string, error) {

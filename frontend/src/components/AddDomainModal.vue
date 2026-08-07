@@ -1,9 +1,8 @@
 <script setup>
 import { ref } from "vue";
 import { api } from "../api/client";
-import { toast } from "./toast";
 
-const props = defineProps({ vmId: { type: String, required: true } });
+const props = defineProps({ projectId: { type: String, required: true } });
 const emit = defineEmits(["close", "added"]);
 
 const domain = ref("");
@@ -16,11 +15,10 @@ function onOverlayClick(e) {
 async function add() {
   error.value = "";
   try {
-    const res = await api(`/vms/${props.vmId}/domains`, {
+    await api(`/projects/${props.projectId}/domains`, {
       method: "POST",
       body: JSON.stringify({ domain: domain.value.trim() }),
     });
-    toast(`Add this CNAME: ${res.required_record.name} -> ${res.required_record.value}`);
     emit("added");
   } catch (e) {
     error.value = e.message;

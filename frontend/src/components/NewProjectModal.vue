@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from "vue";
-import { api } from "../api/client";
+import { api, uploadCustomImage } from "../api/client";
 
 const emit = defineEmits(["close", "created"]);
 
@@ -12,6 +12,13 @@ const name = ref("");
 const image = ref("");
 const vcpus = ref(1);
 const memMib = ref(256);
+
+// Custom microVM (user-uploaded .zip) form
+const customName = ref("");
+const customVcpus = ref(1);
+const customMemMib = ref(256);
+const customFile = ref(null);
+const uploading = ref(false);
 
 // Compose form
 const composeName = ref("");
@@ -78,7 +85,7 @@ async function deploy() {
   try {
     if (activeTab.value === "single") {
       if (!image.value.trim()) throw new Error('"image" is required');
-      const vm = await api("/vms", {
+      const res = await api("/projects", {
         method: "POST",
         body: JSON.stringify({
           name: name.value.trim(),
@@ -87,14 +94,36 @@ async function deploy() {
           mem_mib: parseInt(memMib.value, 10) || 256,
         }),
       });
-      emit("created", { name: "vm", params: { id: vm.id } });
+      const proj = res.project || res;
+      emit("created", { name: "project", params: { id: proj.id } });
+    } else if (activeTab.value === "custom") {
+      if (!customName.value.trim()) throw new Error('"name" is required');
+      if (!customFile.value) throw new Error("select your microVM .zip (rootfs.ext4 + vmlinux)");
+      uploading.value = true;
+      const gi = await uploadCustomImage(customFile.value, {
+        name: customName.value.trim(),
+        vcpus: parseInt(customVcpus.value, 10) || 1,
+        mem_mib: parseInt(customMemMib.value, 10) || 256,
+      });
+      const res = await api("/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          name: customName.value.trim(),
+          image: gi.image,
+          vcpus: gi.vcpus,
+          mem_mib: gi.mem_mib,
+        }),
+      });
+      const proj = res.project || res;
+      emit("created", { name: "project", params: { id: proj.id } });
     } else {
       if (!composeName.value.trim()) throw new Error('"name" is required');
       if (!composeYaml.value.trim()) throw new Error("compose YAML is empty");
-      const proj = await api("/projects/compose", {
+      const res = await api("/projects/compose", {
         method: "POST",
         body: JSON.stringify({ name: composeName.value.trim(), compose_yaml: composeYaml.value }),
       });
+      const proj = res.project || res;
       emit("created", { name: "project", params: { id: proj.id } });
     }
   } catch (e) {
@@ -115,6 +144,9 @@ async function deploy() {
           docker-compose.yml
         </button>
         <button class="tab" :class="{ active: activeTab === 'library' }" @click="loadLibrary">Image Library</button>
+        <button class="tab" :class="{ active: activeTab === 'custom' }" @click="activeTab = 'custom'">
+          Custom MicroVM
+        </button>
       </div>
 
       <div v-if="error" class="error-box">{{ error }}</div>
@@ -136,6 +168,19 @@ async function deploy() {
         <div class="field">
           <label>compose.yaml</label>
           <textarea v-model="composeYaml"></textarea>
+        </div>
+      </div>
+
+      <div v-show="activeTab === 'custom'">
+        <div class="field"><label>Name</label><input v-model="customName" placeholder="my-microvm" /></div>
+        <div class="field-row">
+          <div class="field"><label>vCPUs</label><input v-model="customVcpus" type="number" min="1" /></div>
+          <div class="field"><label>Memory (MiB)</label><input v-model="customMemMib" type="number" min="128" step="128" /></div>
+        </div>
+        <div class="field">
+          <label>MicroVM image (.zip — rootfs.ext4 + vmlinux)</label>
+          <input type="file" accept=".zip,application/zip" @change="(e) => (customFile = e.target.files[0] || null)" />
+          <div class="hint" style="margin-top:6px">Boots your own kernel + rootfs directly with Firecracker.</div>
         </div>
       </div>
 
@@ -167,10 +212,10 @@ async function deploy() {
         <button class="btn" @click="emit('close')">Cancel</button>
         <button
           class="btn btn-primary"
-          :disabled="activeTab === 'library'"
+          :disabled="activeTab === 'library' || uploading"
           @click="deploy"
         >
-          Deploy
+          {{ uploading ? 'Uploading…' : 'Deploy' }}
         </button>
       </div>
     </div>

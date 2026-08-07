@@ -32,8 +32,13 @@ function copySSH() {
 }
 
 async function removeService() {
-  if (!confirm(`Remove service "${props.serviceName}" (stops and deletes all its replicas)?`)) return;
-  await api(`/projects/${props.projectId}/services/${props.serviceName}`, { method: "DELETE" });
+  // Services are grouped inside a project (the backend has no per-service
+  // DELETE); removing one means deleting the project's replica pool.
+  if (!confirm(`Remove service "${props.serviceName}" (stops and deletes the project's replicas)?`)) return;
+  await api(`/projects/${props.projectId}/scale`, {
+    method: "PATCH",
+    body: JSON.stringify({ replicas: 0 }),
+  });
   emit("changed");
 }
 

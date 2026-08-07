@@ -7,6 +7,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/oci"
+	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"porter/internal/event"
 	netmgr "porter/internal/net"
@@ -36,7 +38,7 @@ type FCConfig struct {
 	Snapshotter      string // snapshotter to pull/unpack into (devmapper on a real host)
 	Namespace        string // containerd namespace, e.g. "porter"
 	LogsDir          string // where per-VM stdio logs land (e.g. /var/log/porter)
-	Simulate         bool   // fake the lifecycle (pending->running) for dev/demo, no containerd needed
+	FirecrackerBin   string // path to the firecracker VMM binary (default "firecracker")
 	BareKernel       string // shared vmlinux used to boot BARE (rootfs.ext4) catalog images directly
 }
 
@@ -99,12 +101,8 @@ func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 		return
 	}
 	go func() {
-		if m.cfg.Simulate {
-			m.simulateBoot(vm, spec)
-			return
-		}
 		// Host prerequisites are validated at boot time, not at server
-		// startup, so `porter server` can come up on a fresh box.
+		// startup, so `porter` can come up on a fresh box.
 		if m.cfg.ContainerdSocket == "" {
 			m.setState(vm, types.StateFailed, `no containerd socket configured — set [firecracker] containerd_socket / PORTER_CONTAINERD_SOCKET`)
 			return
@@ -253,23 +251,6 @@ func (m *VMManager) Boot(vm *types.VM, spec netmgr.BootSpec) {
 }
 
 // envSlice renders a map of env vars as the []string the OCI spec wants.
-// simulateBoot fakes a VM lifecycle (pending->booting->running) with no
-// containerd, so the API + dashboard are fully explorable on a box without
-// the runtime. Controlled by [firecracker] simulate = true / PORTER_SIMULATE.
-// No live handle is stored, so Stop() simply flips state to stopped.
-func (m *VMManager) simulateBoot(vm *types.VM, spec netmgr.BootSpec) {
-	time.Sleep(1200 * time.Millisecond)
-	if ip, _, err := net.ParseCIDR(spec.CIDR); err == nil {
-		vm.IPAddress = ip.String()
-	}
-	now := time.Now().UTC()
-	vm.StartedAt = &now
-	vm.ContainerID = "sim-" + vm.ID
-	vm.TaskID = "sim-" + vm.ID
-	m.setState(vm, types.StateRunning, "")
-	m.setHealth(vm, types.HealthHealthy)
-}
-
 func envSlice(env map[string]string) []string {
 	if len(env) == 0 {
 		return nil
@@ -286,17 +267,28 @@ func envSlice(env map[string]string) []string {
 // rootfs files. Used for catalog images registered with a "rootfs" field.
 func (m *VMManager) bootBare(vm *types.VM, spec netmgr.BootSpec) {
 	go func() {
-		if m.cfg.BareKernel == "" {
+		// Per-VM kernel (custom uploaded images) wins; fall back to the shared
+		// vmlinux configured on the manager.
+		kernel := vm.Kernel
+		if kernel == "" {
+			kernel = m.cfg.BareKernel
+		}
+		if kernel == "" {
 			m.setState(vm, types.StateFailed, `no vmlinux for bare images — set [firecracker] kernel_image / PORTER_KERNEL_IMAGE, or run "porter kernel set"`)
 			return
 		}
-		if _, err := os.Stat(m.cfg.BareKernel); err != nil {
+		if _, err := os.Stat(kernel); err != nil {
 			m.setState(vm, types.StateFailed, fmt.Sprintf("vmlinux not found: %v (run `porter kernel set`)", err))
 			return
 		}
 		if _, err := os.Stat(vm.RootfsPath); err != nil {
 			m.setState(vm, types.StateFailed, fmt.Sprintf("rootfs not found: %v", err))
 			return
+		}
+
+		bin := m.cfg.FirecrackerBin
+		if bin == "" {
+			bin = "firecracker"
 		}
 
 		ip, ipnet, err := net.ParseCIDR(spec.CIDR)
@@ -309,7 +301,7 @@ func (m *VMManager) bootBare(vm *types.VM, spec netmgr.BootSpec) {
 		_ = os.Remove(sockPath)
 
 		ctx, cancel := context.WithCancel(context.Background())
-		cmd := exec.Command("firecracker", "--api-sock", sockPath)
+		cmd := exec.Command(bin, "--api-sock", sockPath)
 		if err := cmd.Start(); err != nil {
 			cancel()
 			m.setState(vm, types.StateFailed, fmt.Sprintf("start firecracker: %v", err))
@@ -338,7 +330,7 @@ func (m *VMManager) bootBare(vm *types.VM, spec netmgr.BootSpec) {
 			name string
 			fn   func() error
 		}{
-			{"boot-source", func() error { return fc.SetBootSource(apiCtx, m.cfg.BareKernel, bootArgs) }},
+			{"boot-source", func() error { return fc.SetBootSource(apiCtx, kernel, bootArgs) }},
 			{"drive", func() error { return fc.SetRootDrive(apiCtx, vm.RootfsPath, false) }},
 			{"network-interface", func() error { return fc.SetNetworkInterface(apiCtx, "eth0", spec.MacAddress, spec.HostDevName) }},
 			{"machine-config", func() error { return fc.SetMachineConfig(apiCtx, vm.VCPUs, vm.MemMiB) }},
@@ -523,4 +515,36 @@ func probeHealth(vm *types.VM, hc *types.Healthcheck) bool {
 	}
 	conn.Close()
 	return true
+}
+// Exec runs a shell process inside a containerd-booted VM's task (OCI images),
+// wiring the process stdio to the given io.Reader/io.Writer (the SSH gateway's
+// session channels). Satisfies sshgw.Execer so `porter ssh` bridges into the
+// guest without any sshd inside it. Bare (direct-Firecracker) VMs have no
+// containerd task and return a clear error.
+func (m *VMManager) Exec(ctx context.Context, vmID string, stdin, stdout interface{}) error {
+	m.mu.Lock()
+	rv, ok := m.vms[vmID]
+	m.mu.Unlock()
+	if !ok || rv == nil || rv.task == nil {
+		return fmt.Errorf("sshgw: no containerd task for vm %s (bare VMs don't support exec)", vmID)
+	}
+	in, inOK := stdin.(io.Reader)
+	out, outOK := stdout.(io.Writer)
+	if !inOK || !outOK {
+		return fmt.Errorf("sshgw: stdio must be io.Reader/io.Writer")
+	}
+	spec := &specs.Process{
+		Args: []string{"/bin/sh"},
+		Env:  []string{"TERM=xterm"},
+		Cwd:  "/",
+	}
+	proc, err := rv.task.Exec(ctx, "porter-ssh-"+vmID, spec, cio.NewCreator(cio.WithStreams(in, out, out)))
+	if err != nil {
+		return fmt.Errorf("sshgw: task exec: %w", err)
+	}
+	if err := proc.Start(ctx); err != nil {
+		return fmt.Errorf("sshgw: exec start: %w", err)
+	}
+	_, err = proc.Wait(ctx)
+	return err
 }

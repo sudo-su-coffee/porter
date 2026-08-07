@@ -83,44 +83,44 @@ onMounted(load);
       <div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value" style="font-size:16px">{{ uptime() }}</div></div>
     </div>
 
-    <div class="section-title">Registered servers (Phase 8)</div>
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">Cluster hosts</span>
-        <button class="btn btn-sm btn-primary" @click="showRegister = true">+ Register</button>
-      </div>
-      <p v-if="!servers.length" class="page-sub" style="margin-top:10px">No hosts registered yet.</p>
-      <div v-for="s in servers" :key="s.id" class="domain-row">
-        <span class="mono">{{ s.name }}</span>
-        <span class="mono">{{ s.address }}</span>
-        <span><span class="pill pill-verified">{{ s.status }}</span>
-        <button class="btn btn-sm btn-danger" style="margin-left:8px" @click="unregister(s.id)">Remove</button></span>
-      </div>
+    <div class="page-sub" style="margin-bottom:8px">Registered servers</div>
+    <div class="filter-bar">
+      <button class="btn btn-sm btn-primary" @click="showRegister = true">+ Register</button>
+    </div>
+    <div class="table-wrap" style="margin-bottom:22px">
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Address</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+        <tbody>
+          <tr v-for="s in servers" :key="s.id">
+            <td class="mono">{{ s.name }}</td>
+            <td class="mono">{{ s.address }}</td>
+            <td><span class="tag" :class="s.status === 'registered' ? 'tag-green' : 'tag-amber'">{{ s.status }}</span></td>
+            <td style="text-align:right"><button class="icon-btn danger" title="Remove" @click="unregister(s.id)">✕</button></td>
+          </tr>
+          <tr v-if="!servers.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No hosts registered yet.</td></tr>
+        </tbody>
+      </table>
     </div>
 
-    <div class="section-title">Storage (optional mounts)</div>
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">Attached storage (mnt drives)</span>
-        <div class="detail-actions">
-          <input v-model="newVolume.name" placeholder="mount name" style="width:140px" />
-          <input v-model.number="newVolume.size_mib" type="number" placeholder="MiB" style="width:90px" />
-          <button class="btn btn-sm btn-primary" @click="createVolume">+ Create mount</button>
-        </div>
-      </div>
-      <p class="page-sub" style="margin-top:10px">
-        Every VM already runs on persistent rootfs (its own devmapper snapshot).
-        These are <b>extra</b> storage mounts you can attach to a VM at create
-        time for shared/cross-VM data — like mounting a drive at a path inside
-        the guest.
-      </p>
-      <p v-if="!volumes.length" class="page-sub" style="margin-top:10px">No extra mounts defined yet.</p>
-      <div v-for="v in volumes" :key="v.id" class="domain-row">
-        <span class="mono">{{ v.name }}</span>
-        <span class="muted muted-sm">{{ v.size_mib }} MiB</span>
-        <span class="mono muted-sm">{{ v.path }}</span>
-        <button class="btn btn-sm btn-danger" @click="deleteVolume(v.id)">Delete</button>
-      </div>
+    <div class="page-sub" style="margin-bottom:8px">Storage (optional mounts)</div>
+    <div class="filter-bar">
+      <input v-model="newVolume.name" placeholder="mount name" style="width:160px" />
+      <input v-model.number="newVolume.size_mib" type="number" placeholder="MiB" style="width:90px" />
+      <button class="btn btn-sm btn-primary" @click="createVolume">+ Create mount</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Size</th><th>Path</th><th style="text-align:right">Actions</th></tr></thead>
+        <tbody>
+          <tr v-for="v in volumes" :key="v.id">
+            <td class="mono">{{ v.name }}</td>
+            <td class="num">{{ v.size_mib }} MiB</td>
+            <td class="mono muted">{{ v.path }}</td>
+            <td style="text-align:right"><button class="icon-btn danger" title="Delete" @click="deleteVolume(v.id)">✕</button></td>
+          </tr>
+          <tr v-if="!volumes.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No extra mounts defined yet.</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="modal-overlay" v-if="showRegister" @click.self="showRegister = false">

@@ -10,6 +10,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	"porter/internal/types"
 )
 
 // Store is the narrow persistence surface the resolver needs.

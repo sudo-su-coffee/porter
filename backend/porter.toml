@@ -1,22 +1,37 @@
-# Porter prototype config. This file is read from PORTER_CONFIG (default
-# "porter.toml", relative to the working directory the binary runs from).
-# Every PORTER_* environment variable overrides the matching value here,
-# so this file is optional, not required.
+# Porter local config — real microVM boots (containerd + aws.firecracker).
+# Fill in real secrets. Every key can be overridden by a PORTER_* env var.
+# Overlayfs snapshotter (works in WSL2; devmapper needs the dm kernel module).
 
 [server]
 listen_addr = ":8080"
-base_domain = "example.com"
-state_file  = "porter.db"          # SQLite database file (created if missing)
-api_token   = "REPLACE_WITH_$(openssl rand -hex 32)"  # CHANGE THIS — see note below
+base_domain = "porter.test"
+api_token   = "arsfgvdfxgvesrdfgvsedzxgq3erasdfvezs"      # CHANGE ME — dashboard login returns this as the bearer token
+
+[database]
+url          = "postgres://porter:porter@localhost:5432/porter?sslmode=disable"
+auto_migrate = true
 
 [firecracker]
-kernel_image    = "./vmlinux"
-rootfs_path     = "./rootfs.ext4"
-firecracker_bin = "firecracker"
+containerd_socket = "/run/containerd/containerd.sock"
+snapshotter       = "overlayfs"   # WSL2-friendly; switch to devmapper on a full Linux host if provisioned
+namespace         = "porter"
+logs_dir          = "/var/log/porter"
+images_dir        = "vms/images"
 
 [admin]
-# Single prototype admin account — no user database. The dashboard's
-# login screen checks these, then hands back api_token above for all
-# subsequent API calls (see /login in api.go).
 username = "admin"
-password = "change-me"
+password = "change-me"      
+
+[gateway]
+enabled     = true
+listen_addr = ":80"
+
+[dns]
+enabled = true
+
+[health]
+enabled = true
+
+[ssh]
+enabled     = false
+listen_addr = ":2222"

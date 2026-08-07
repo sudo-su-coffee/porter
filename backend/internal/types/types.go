@@ -63,6 +63,7 @@ type VM struct {
 	ReplicaIndex int               `json:"replica_index"`
 	Image        string            `json:"image"`
 	RootfsPath   string            `json:"rootfs_path,omitempty"`
+	Kernel       string            `json:"kernel,omitempty"` // per-VM vmlinux (custom images); falls back to the shared kernel
 	ContainerID  string            `json:"container_id,omitempty"`
 	TaskID       string            `json:"task_id,omitempty"`
 	VCPUs        int               `json:"vcpus"`
@@ -102,6 +103,11 @@ type Project struct {
 	Tags            []string                `json:"tags,omitempty"`
 	SSHEnabled      bool                    `json:"ssh_enabled,omitempty"` // SSH off by default; user turns it on per project
 	Replicas        int                     `json:"replicas,omitempty"`    // alias for replica pool size
+	StackID         string                  `json:"stack_id,omitempty"`    // parent compose stack, if this project is a compose service
+	ComposeService  string                  `json:"compose_service,omitempty"` // service name inside its stack
+	Model           string                  `json:"model,omitempty"`       // ML model ref (gpu/batch serving)
+	GPU             string                  `json:"gpu,omitempty"`         // e.g. "nvidia-t4" or ""
+	Networks        []string                `json:"networks,omitempty"`    // per-project bridge networks
 	CreatedAt       time.Time               `json:"created_at"`
 }
 
@@ -141,6 +147,7 @@ type User struct {
 // state dir; snapshots/backups/object-storage are later versions.
 type Volume struct {
 	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id,omitempty"`
 	Name      string    `json:"name"`
 	SizeMiB   int       `json:"size_mib"`
 	Path      string    `json:"path,omitempty"`
@@ -189,6 +196,9 @@ type GoldenImage struct {
 	Tags        []string          `json:"tags"`
 	Logo        string            `json:"logo"` // image URL for the dashboard tile
 	Version     string            `json:"version"`
+	Kind        string            `json:"kind,omitempty"` // oci | custom (user-uploaded microVM)
+	Rootfs      string            `json:"rootfs,omitempty"` // host path to ext4 rootfs (custom)
+	Kernel      string            `json:"kernel,omitempty"` // host path to vmlinux (custom)
 	CreatedAt   time.Time         `json:"created_at"`
 }
 
@@ -262,5 +272,139 @@ type DNSRecord struct {
 	Type      string    `json:"type"`
 	Value     string    `json:"value"`
 	TTL       int       `json:"ttl"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Stack is a docker-compose project: a named group of service-projects. Each
+// compose service is its OWN project (own microVM pool), grouped under a stack.
+type Stack struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	OrgID       string    `json:"org_id,omitempty"`
+	Source      string    `json:"source"`
+	ComposeYAML string    `json:"compose_yaml,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// APIKey is a long-lived per-user token for programmatic access.
+type APIKey struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	Name      string    `json:"name"`
+	TokenHash string    `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	LastUsed  *time.Time `json:"last_used_at,omitempty"`
+}
+
+// Alert is a threshold rule over a project metric.
+type Alert struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	Metric    string    `json:"metric"`
+	Threshold float64   `json:"threshold"`
+	Op        string    `json:"op"`
+	CooldownS int       `json:"cooldown_s"`
+	Silenced  bool      `json:"silenced"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Hook is an outbound webhook fired on project lifecycle events.
+type Hook struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	URL       string    `json:"url"`
+	Events    []string  `json:"events"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Cron is a scheduled job that boots `job_image` as a short-lived microVM.
+type Cron struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	Schedule  string    `json:"schedule"`
+	JobImage  string    `json:"job_image"`
+	Active    bool      `json:"active"`
+	LastRun   *time.Time `json:"last_run_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Drain ships a project's logs/events to an external endpoint.
+type Drain struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	Endpoint  string    `json:"endpoint"`
+	Kind      string    `json:"kind"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Redirect is a domain redirect rule for a project.
+type Redirect struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Source    string    `json:"source"`
+	Target    string    `json:"target"`
+	Permanent bool      `json:"permanent"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// FirewallRule is an ingress/egress allow/deny rule for a project.
+type FirewallRule struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Direction string    `json:"direction"`
+	Action    string    `json:"action"`
+	Proto     string    `json:"proto"`
+	Ports     string    `json:"ports"`
+	Source    string    `json:"source"`
+	Priority  int       `json:"priority"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Environment is a deploy environment (prod/staging/preview, Vercel-style).
+type Environment struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	Branch    string    `json:"branch"`
+	URL       string    `json:"url"`
+	EnvDomain string    `json:"env_domain"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Build is a git-based build that produces an OCI image for a microVM deploy.
+type Build struct {
+	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
+	GitURL      string    `json:"git_url"`
+	Branch      string    `json:"branch"`
+	BuildStatus string    `json:"build_status"`
+	Image       string    `json:"image"`
+	Log         string    `json:"log"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Network is a per-project bridge network (docker-ecosystem parity).
+type Network struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	CIDR      string    `json:"cidr"`
+	Driver    string    `json:"driver"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ProjectMember is a membership/role row for a project team.
+type ProjectMember struct {
+	ProjectID string    `json:"project_id"`
+	UserID    string    `json:"user_id"`
+	Role      string    `json:"role"`
+	Invited   bool      `json:"invited"`
 	CreatedAt time.Time `json:"created_at"`
 }

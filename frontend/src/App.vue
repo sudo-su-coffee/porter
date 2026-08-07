@@ -4,12 +4,32 @@ import { useRoute, useRouter } from "vue-router";
 import { connectionLive, connectEvents, disconnectEvents } from "./api/events";
 import NewProjectModal from "./components/NewProjectModal.vue";
 import ToastContainer from "./components/ToastContainer.vue";
-import { clearToken } from "./api/client";
+import { clearToken, getToken } from "./api/client";
 
 const route = useRoute();
 const router = useRouter();
 const showNewProject = ref(false);
-const showTopbar = computed(() => route.name !== "login");
+const authed = computed(() => route.name !== "login");
+const user = computed(() => getToken() ? "admin" : "");
+
+const nav = [
+  { section: "Overview" },
+  { name: "Deployments", to: "/", icon: "◧" },
+  { name: "Traffic", to: "/traffic", icon: "⇄" },
+  { name: "Domains", to: "/domains", icon: "◉" },
+  { section: "Manage" },
+  { name: "Images", to: "/images", icon: "▤" },
+  { name: "Servers", to: "/servers", icon: "⬒" },
+  { name: "Logs", to: "/logs", icon: "≡" },
+  { section: "Access" },
+  { name: "Teams", to: "/teams", icon: "⚑" },
+  { name: "Settings", to: "/settings", icon: "⚙" },
+];
+
+function isActive(to) {
+  if (to === "/") return route.path === "/" || route.path.startsWith("/projects") || route.path.startsWith("/vms");
+  return route.path === to;
+}
 
 function logout() {
   clearToken();
@@ -21,26 +41,35 @@ onUnmounted(() => disconnectEvents());
 </script>
 
 <template>
-  <header class="topbar" v-if="showTopbar">
-    <div class="brand" @click="router.push({ name: 'list' })">
-      <span class="brand-mark">▣</span> Porter
-    </div>
-    <nav class="topnav">
-      <router-link class="nav-link" :to="{ name: 'list' }">Deployments</router-link>
-      <router-link class="nav-link" :to="{ name: 'images' }">Images</router-link>
-      <router-link class="nav-link" :to="{ name: 'servers' }">Servers</router-link>
-      <router-link class="nav-link" :to="{ name: 'logs' }">Logs</router-link>
-    </nav>
-    <div class="topbar-right">
-      <span class="conn-dot" :class="connectionLive ? 'live' : 'down'" :title="connectionLive ? 'Live' : 'Connecting…'"></span>
-      <button class="btn btn-primary" @click="showNewProject = true">New Project</button>
-      <button class="btn" @click="logout">Sign out</button>
-    </div>
-  </header>
+  <div v-if="authed" class="shell">
+    <aside class="sidebar">
+      <div class="side-brand" @click="router.push({ name: 'list' })">
+        <span class="brand-mark">▣</span><span>Porter</span>
+      </div>
+      <nav class="side-nav">
+        <template v-for="(item, i) in nav" :key="i">
+          <div v-if="item.section" class="side-section">{{ item.section }}</div>
+          <router-link v-else class="side-link" :class="{ active: isActive(item.to) }" :to="item.to">
+            <span class="ico">{{ item.icon }}</span><span>{{ item.name }}</span>
+          </router-link>
+        </template>
+      </nav>
+      <div class="side-footer">
+        <div class="side-user">
+          <span class="dot"></span><span>{{ user }}</span>
+        </div>
+        <button class="btn btn-primary" style="width: 100%" @click="showNewProject = true">+ New Project</button>
+        <button class="btn" style="width: 100%" @click="logout">Sign out</button>
+      </div>
+    </aside>
 
-  <main>
-    <router-view />
-  </main>
+    <div class="content">
+      <main>
+        <router-view />
+      </main>
+    </div>
+  </div>
+  <router-view v-else />
 
   <NewProjectModal v-if="showNewProject" @close="showNewProject = false" @created="(t) => { showNewProject = false; router.push(t); }" />
   <ToastContainer />

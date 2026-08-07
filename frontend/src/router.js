@@ -7,12 +7,20 @@ import VmDetail from "./views/VmDetail.vue";
 import Images from "./views/Images.vue";
 import Servers from "./views/Servers.vue";
 import Logs from "./views/Logs.vue";
+import Traffic from "./views/Traffic.vue";
+import Domains from "./views/Domains.vue";
+import Teams from "./views/Teams.vue";
+import Settings from "./views/Settings.vue";
 import Login from "./views/Login.vue";
 
 const routes = [
   { path: "/", name: "list", component: DeploymentsList },
   { path: "/projects/:id", name: "project", component: ProjectDetail, props: true },
   { path: "/vms/:id", name: "vm", component: VmDetail, props: true },
+  { path: "/traffic", name: "traffic", component: Traffic },
+  { path: "/domains", name: "domains", component: Domains },
+  { path: "/teams", name: "teams", component: Teams },
+  { path: "/settings", name: "settings", component: Settings },
   { path: "/images", name: "images", component: Images },
   { path: "/servers", name: "servers", component: Servers },
   { path: "/logs", name: "logs", component: Logs },

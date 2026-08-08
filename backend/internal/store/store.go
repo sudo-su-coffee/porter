@@ -472,6 +472,25 @@ func (s *Store) AddProjectToGroup(groupID, projectID string) error {
 	return err
 }
 
+func (s *Store) GetGroup(id string) (*types.Group, bool) {
+	var g types.Group
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(org_id,''), name FROM groups WHERE id = $1`, id).
+		Scan(&g.ID, &g.OrgID, &g.Name); err != nil {
+		return nil, false
+	}
+	return &g, true
+}
+
+func (s *Store) DeleteGroup(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM groups WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete group %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
 func (s *Store) RemoveProjectFromGroup(groupID, projectID string) error {
 	_, err := s.pool.Exec(context.Background(), `
 		DELETE FROM group_projects WHERE group_id = $1 AND project_id = $2`,
@@ -1000,6 +1019,42 @@ func (s *Store) ClearTrafficFor(vmIDs []string) {
 	for _, id := range vmIDs {
 		delete(s.traffic, id)
 	}
+}
+
+// ClearTrafficForPath removes traffic-ring entries matching path for a
+// project's VMs and deletes their durable traffic_logs. Backs the scoped
+// path-level cache purge (POST /projects/{id}/cache/purge/path); unlike
+// ClearTrafficFor it keeps everything that is not that one path.
+func (s *Store) ClearTrafficForPath(projectID, path string) (removed int) {
+	proj, ok := s.GetProject(projectID)
+	if !ok {
+		return 0
+	}
+	s.trafficMu.Lock()
+	for _, vmID := range proj.VMIDs {
+		buf := s.traffic[vmID]
+		k := buf[:0]
+		for _, e := range buf {
+			if e.Path == path {
+				removed++
+				continue
+			}
+			k = append(k, e)
+		}
+		if len(k) == 0 {
+			delete(s.traffic, vmID)
+		} else {
+			s.traffic[vmID] = k
+		}
+	}
+	s.trafficMu.Unlock()
+	if s.pool != nil {
+		if _, err := s.pool.Exec(context.Background(),
+			`DELETE FROM traffic_logs WHERE project_id=$1 AND path=$2`, projectID, path); err == nil {
+			// durable rows removed best-effort; ring count is the returned figure
+		}
+	}
+	return removed
 }
 
 // --- Log ring buffer (in-memory only) ---

@@ -123,11 +123,24 @@ func (a *API) handleSignup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePasswordForgot(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "password reset email not configured in single-tenant mode")
+	// Single-tenant: the only account is the bootstrap admin whose password
+	// lives in porter.toml [admin]. Self-service reset has no backend by design —
+	// surface the real remediation path instead of a fake "email sent".
+	a.store.AppendDaemonLog("password reset requested for single-tenant admin (no email backend)")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "unsupported",
+		"account": a.adminUser,
+		"reason":  "single-tenant config-admin; change [admin] password in porter.toml and restart the service",
+	})
 }
 
 func (a *API) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "password reset not configured in single-tenant mode")
+	a.store.AppendDaemonLog("password reset token attempt rejected (single-tenant, no token store)")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "unsupported",
+		"account": a.adminUser,
+		"reason":  "single-tenant config-admin; change [admin] password in porter.toml and restart the service",
+	})
 }
 
 func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1884,7 +1897,24 @@ func (a *API) handleCreateEnvironment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleEnvironmentsAvailable(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"available": []string{"production", "preview", "staging", "development"}})
+	// Derive from the persisted environments for this project plus the standard
+	// Vercel-style defaults (production/preview are always meaningful targets).
+	seen := map[string]bool{}
+	avail := []string{}
+	for _, def := range []string{"production", "preview", "staging", "development"} {
+		if !seen[def] {
+			seen[def] = true
+			avail = append(avail, def)
+		}
+	}
+	active := a.store.ListEnvironments(a.projectID(r))
+	for _, e := range active {
+		if e.Name != "" && !seen[e.Name] {
+			seen[e.Name] = true
+			avail = append(avail, e.Name)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"available": avail, "active": active})
 }
 
 func (a *API) handleGetEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -1932,6 +1962,11 @@ func (a *API) handleDeleteEnvironment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleEnvBranch(w http.ResponseWriter, r *http.Request) {
+	e, ok := a.store.GetEnvironment(r.PathValue("envId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "environment not found")
+		return
+	}
 	var req struct {
 		Branch string `json:"branch"`
 	}
@@ -1939,10 +1974,17 @@ func (a *API) handleEnvBranch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"environment": r.PathValue("envId"), "branch": req.Branch, "status": "updated"})
+	e.Branch = req.Branch
+	a.store.PutEnvironment(e)
+	writeJSON(w, http.StatusOK, map[string]any{"environment": e.ID, "branch": e.Branch, "status": "updated"})
 }
 
 func (a *API) handleEnvDomain(w http.ResponseWriter, r *http.Request) {
+	e, ok := a.store.GetEnvironment(r.PathValue("envId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "environment not found")
+		return
+	}
 	var req struct {
 		EnvDomain string `json:"env_domain"`
 	}
@@ -1950,7 +1992,9 @@ func (a *API) handleEnvDomain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"environment": r.PathValue("envId"), "env_domain": req.EnvDomain, "status": "updated"})
+	e.EnvDomain = req.EnvDomain
+	a.store.PutEnvironment(e)
+	writeJSON(w, http.StatusOK, map[string]any{"environment": e.ID, "env_domain": e.EnvDomain, "status": "updated"})
 }
 
 func (a *API) handleEnvRange(w http.ResponseWriter, r *http.Request) {
@@ -2568,8 +2612,9 @@ func (a *API) handleCachePurgePath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	a.store.AppendDaemonLog(fmt.Sprintf("cache path purge for project %s: %s", a.projectID(r), req.Path))
-	writeJSON(w, http.StatusOK, map[string]any{"status": "path purged", "path": req.Path, "project_id": a.projectID(r)})
+	removed := a.store.ClearTrafficForPath(a.projectID(r), req.Path)
+	a.store.AppendDaemonLog(fmt.Sprintf("cache path purge for project %s: %s (%d entries removed)", a.projectID(r), req.Path, removed))
+	writeJSON(w, http.StatusOK, map[string]any{"status": "path purged", "path": req.Path, "project_id": a.projectID(r), "removed": removed})
 }
 
 func (a *API) handleListVolumes(w http.ResponseWriter, r *http.Request) {
@@ -2850,7 +2895,26 @@ func (a *API) handleHostPorts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleHostKernel(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"kernel": "firecracker-containerd shim", "vmlinux": "managed by host"})
+	// Report the real kernel image the microVM shim boots. It is provisioned by
+	// `porter kernel set`; probe well-known install paths rather than claim a
+	// canned value.
+	for _, p := range []string{
+		"/etc/porter/kernel/vmlinux",
+		"/opt/porter/kernel/vmlinux",
+		"/var/lib/porter/kernel/vmlinux",
+		"kernel/vmlinux",
+	} {
+		if fi, err := os.Stat(p); err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"kernel":   "firecracker",
+				"path":     p,
+				"size":     fi.Size(),
+				"modified": fi.ModTime(),
+			})
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "vmlinux not found on host; run `porter kernel set <url>` (see deploy/install.sh)")
 }
 
 func (a *API) handleAllTraffic(w http.ResponseWriter, r *http.Request) {
@@ -3062,7 +3126,13 @@ func (a *API) handlePoolStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePoolDrain(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "pool draining", "project_id": a.projectID(r)})
+	// Real drain: persist the draining state, stop every live replica, and
+	// report how many were actually stopped.
+	projID := a.projectID(r)
+	a.store.PutProjectSettings(projID, "pool", map[string]any{"draining": true, "drained_at": time.Now().Format(time.RFC3339)})
+	n := a.mutateReplicas(projID, nil, "stop")
+	a.store.AppendDaemonLog(fmt.Sprintf("pool drained for project %s (%d replicas stopped)", projID, n))
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "draining", "project_id": projID, "stopped": n})
 }
 
 func (a *API) handleListProjectMembers(w http.ResponseWriter, r *http.Request) {

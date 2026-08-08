@@ -543,7 +543,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// ========== Git Builds & GitOps (self-hosted Vercel vision) ==========
 	mux.HandleFunc("POST /projects/{projectId}/git/import", a.auth(a.handleGitImport))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/git", a.auth(a.handleDeployGit))
-	mux.HandleFunc("POST /projects/{projectId}/builds", a.auth(a.handleListBuilds))
+	mux.HandleFunc("GET /projects/{projectId}/builds", a.auth(a.handleListBuilds))
+	mux.HandleFunc("POST /projects/{projectId}/builds", a.auth(a.handleCreateBuild))
 	mux.HandleFunc("POST /projects/{projectId}/builds/run", a.auth(a.handleCreateBuild))
 	mux.HandleFunc("GET /projects/{projectId}/builds/{buildId}/logs", a.auth(a.handleBuildLogs))
 	mux.HandleFunc("GET /projects/{projectId}/git/branches", a.auth(a.handleGitBranches))
@@ -790,11 +791,31 @@ func (a *API) handleGetGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePatchGroup(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "updated"})
+	g, ok := a.store.GetGroup(r.PathValue("groupId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "group not found")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.Name != "" {
+		g.Name = req.Name
+	}
+	if err := a.store.PutGroup(g); err != nil {
+		writeError(w, http.StatusInternalServerError, "update group: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, g)
 }
 
 func (a *API) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
+	deleted := a.store.DeleteGroup(r.PathValue("groupId"))
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": r.PathValue("groupId"), "deleted": deleted})
 }
 
 func (a *API) handleGroupProjects(w http.ResponseWriter, r *http.Request) {

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"porter/internal/compose"
 	"porter/internal/event"
 	"porter/internal/netmgr"
 	"porter/internal/store"
@@ -35,6 +36,13 @@ type VMRunner interface {
 	Stop(ctx context.Context, vm *types.VM) error
 	Restart(ctx context.Context, vm *types.VM) error
 	Delete(ctx context.Context, vm *types.VM) error
+}
+
+// Execer optionally bridges a command into a running VM's containerd task
+// (the SSH/console path). Implemented by the runtime engine when the host has
+// containerd; nil when unavailable (bare/firecracker-only boots).
+type Execer interface {
+	Exec(ctx context.Context, vmID string, stdin, stdout interface{}) error
 }
 
 // Cataloger lists known images (OCI refs, never local paths).
@@ -232,7 +240,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	// ========== Auth & Users ==========
 	mux.HandleFunc("POST /auth/login", a.handleLogin)
+	mux.HandleFunc("POST /login", a.handleLogin) // legacy alias the shipped dashboard still posts to
 	mux.HandleFunc("POST /auth/logout", a.handleLogout)
+	mux.HandleFunc("POST /logout", a.handleLogout)
 
 	mux.HandleFunc("POST /auth/signup", a.handleSignup)
 	mux.HandleFunc("POST /auth/password/forgot", a.handlePasswordForgot)
@@ -505,6 +515,14 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /events", a.hub)
 	mux.HandleFunc("GET /orgs/events", a.auth(a.handleOrgEvents)) // org from header
 	mux.HandleFunc("GET /overview", a.auth(a.handleOverview))
+
+	// ========== Legacy /vms aliases (the shipped dashboard still uses them) ==========
+	mux.HandleFunc("GET /vms", a.auth(a.handleListAllVMs))
+	mux.HandleFunc("GET /vms/{replicaId}", a.auth(a.handleGetVMCompat))
+	mux.HandleFunc("POST /vms/{replicaId}/start", a.auth(a.handleReplicaStartByID))
+	mux.HandleFunc("POST /vms/{replicaId}/stop", a.auth(a.handleReplicaStopByID))
+	mux.HandleFunc("POST /vms/{replicaId}/restart", a.auth(a.handleReplicaRestartByID))
+	mux.HandleFunc("DELETE /vms/{replicaId}", a.auth(a.handleVMCompatDelete))
 	mux.HandleFunc("GET /host/overview", a.auth(a.handleHostOverview))
 	mux.HandleFunc("GET /logs", a.auth(a.handleDaemonLogs))
 	mux.HandleFunc("GET /host/ports", a.auth(a.handleHostPorts))
@@ -851,6 +869,15 @@ func (a *API) createProjectFrom(w http.ResponseWriter, req createProjectReq) {
 func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 	// unchanged ...
 	vmID := store.NewID()
+	env := req.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+	for k, v := range a.secretsEnv(proj) {
+		if _, exists := env[k]; !exists {
+			env[k] = v
+		}
+	}
 	vm := &types.VM{
 		ID:           vmID,
 		Name:         fmt.Sprintf("%s-%d", proj.Name, idx),
@@ -863,7 +890,7 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		VCPUs:        req.VCPUs,
 		MemMiB:       req.MemMiB,
 		Ports:        req.Ports,
-		Env:          req.Env,
+		Env:          env,
 		CreatedAt:    time.Now(),
 	}
 	a.applyImageManifest(vm)
@@ -876,6 +903,23 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		go func(c types.VM) { _ = a.vmm.Boot(context.Background(), &c) }(*vm)
 	}
 	a.store.PutProject(proj)
+}
+
+// secretsEnv returns the merged project.env + decrypted project secrets, so
+// every replica boots with its declared environment AND its secrets injected.
+func (a *API) secretsEnv(proj *types.Project) map[string]string {
+	merged := map[string]string{}
+	if proj.Env != nil {
+		for k, v := range proj.Env {
+			merged[k] = v
+		}
+	}
+	for _, sec := range a.store.ListSecrets(proj.ID) {
+		if val, err := a.decryptSecret(sec.ValueEncrypted); err == nil {
+			merged[sec.Name] = val
+		}
+	}
+	return merged
 }
 
 // applyImageManifest fills VM fields from a custom (user-uploaded microVM)
@@ -910,13 +954,68 @@ func (a *API) handleCreateComposeProject(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.ComposeYAML) == "" || !strings.Contains(req.ComposeYAML, "services:") {
-		writeError(w, http.StatusBadRequest, "compose parse error: no services found under services:")
+	svcs, perr := compose.ParseCompose(req.ComposeYAML)
+	if perr != nil {
+		writeError(w, http.StatusBadRequest, perr.Error())
 		return
 	}
-	cr := createProjectReq{Name: req.Name, ComposeYAML: req.ComposeYAML}
-	cr.OrgID = a.orgIDFromHeader(r)
-	a.createProjectFrom(w, cr)
+	if req.Name == "" {
+		req.Name = "compose-" + time.Now().Format("20060102-150405")
+	}
+	orgID := a.orgIDFromHeader(r)
+	if orgID == "" {
+		if orgs := a.store.ListOrgs(); len(orgs) > 0 {
+			orgID = orgs[0].ID
+		}
+	}
+
+	// A compose file is a *stack*: one project per service, each holding its own
+	// microVM pool, all grouped under one stack row (docker-ecosystem parity).
+	stack := &types.Stack{ID: store.NewID(), Name: req.Name, OrgID: orgID, Source: "compose", ComposeYAML: req.ComposeYAML, CreatedAt: time.Now()}
+	a.store.PutStack(stack)
+
+	created := make([]*types.Project, 0, len(svcs))
+	for _, svc := range svcs {
+		proj := &types.Project{
+			ID:              store.NewID(),
+			OrgID:           orgID,
+			Name:            req.Name + "/" + svc.Name,
+			Source:          "compose",
+			Image:           svc.Image,
+			Network:         "10.42.0.0/16",
+			ReplicasDesired: svc.Replicas,
+			Replicas:        svc.Replicas,
+			RestartPolicy:   "on-failure",
+			Healthcheck:     svc.Healthcheck,
+			Env:             svc.Env,
+			ComposeYAML:     req.ComposeYAML,
+			StackID:         stack.ID,
+			ComposeService:  svc.Name,
+			ServicePools:    map[string]*types.ServicePool{},
+			VMIDs:           []string{},
+			CreatedAt:       time.Now(),
+		}
+		if a.net != nil {
+			if sub, serr := a.net.AllocateSubnet(); serr == nil {
+				proj.Network = sub.String()
+			}
+		}
+		spec := createProjectReq{Name: proj.Name, Image: svc.Image, Env: svc.Env, Ports: svc.Ports, Healthcheck: svc.Healthcheck, Replicas: svc.Replicas}
+		if svc.Networks != nil {
+			proj.Networks = svc.Networks
+		} else if topNetworks := compose.ParseTopLevelNetworks(req.ComposeYAML); len(topNetworks) > 0 {
+			proj.Networks = topNetworks
+		}
+		spec.OrgID = orgID
+		a.store.PutProject(proj)
+		for i := 0; i < svc.Replicas; i++ {
+			a.bootReplica(proj, spec, i)
+		}
+		a.store.AppendDaemonLog(fmt.Sprintf("compose stack %s: service %s (%s) with %d replica(s)", req.Name, svc.Name, svc.Image, svc.Replicas))
+		created = append(created, proj)
+	}
+	a.hub.Broadcast("compose.created", map[string]any{"stack": req.Name, "projects": len(created)})
+	writeJSON(w, http.StatusCreated, map[string]any{"stack": stack, "projects": created})
 }
 
 // handleListProjects, handleGetProject, handlePatchProject, handleDeleteProject, handleRedeployProject unchanged except PatchProject could use org header? not needed.

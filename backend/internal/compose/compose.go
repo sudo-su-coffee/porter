@@ -23,8 +23,55 @@ type ComposeService struct {
 	Env         map[string]string
 	Replicas    int
 	DependsOn   []string
+	Networks    []string // service-level `networks:` membership (shared bridge)
 	Healthcheck *types.Healthcheck
 	Restart     string
+}
+
+// TopLevelNetworks is the set of user-declared networks at the top level
+// (`networks:` in the compose file). A service that names one of these shares
+// that bridge with every other attached service — Porter's "shared network"
+// model: one shared microVM bridge with its own DNS, per-service sandbox.
+type TopLevelNetworks struct {
+	Names []string
+}
+
+// ParseTopLevelNetworks extracts the declared `networks:` block at the top of
+// a compose file. It is a light scan (the constrained parser focuses on
+// services); unknown mapping bodies are ignored.
+func ParseTopLevelNetworks(yamlText string) []string {
+	lines := strings.Split(strings.ReplaceAll(yamlText, "\t", "    "), "\n")
+	inNetworks := false
+	networksIndent := -1
+	seen := map[string]bool{}
+	var out []string
+	for _, raw := range lines {
+		line := regexp.MustCompile(`(^|\s)#.*$`).ReplaceAllString(raw, "")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		trimmed := strings.TrimSpace(line)
+		if !inNetworks {
+			if trimmed == "networks:" {
+				inNetworks = true
+				networksIndent = indent
+			}
+			continue
+		}
+		if indent <= networksIndent {
+			break
+		}
+		// A network name at the first level under `networks:` (e.g. `default:`)
+		if strings.HasSuffix(trimmed, ":") && !strings.Contains(trimmed, " ") {
+			name := strings.TrimSuffix(trimmed, ":")
+			if !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 // ParseCompose implements the constrained subset described in the README:
@@ -107,6 +154,8 @@ func ParseCompose(yamlText string) ([]ComposeService, error) {
 				svc.Env[k] = v
 			case "depends_on":
 				svc.DependsOn = append(svc.DependsOn, item)
+			case "networks":
+				svc.Networks = append(svc.Networks, item)
 			case "deploy":
 				if k, v, ok := strings.Cut(item, ":"); ok && strings.TrimSpace(k) == "replicas" {
 					n, err := strconv.Atoi(strings.TrimSpace(v))
@@ -145,7 +194,7 @@ func ParseCompose(yamlText string) ([]ComposeService, error) {
 			svc.Restart = val
 		case "build":
 			return nil, fmt.Errorf(`compose parse error: service %q: only image-based services are supported (no "build:")`, svc.Name)
-		case "ports", "environment", "depends_on", "deploy", "healthcheck":
+		case "ports", "environment", "depends_on", "networks", "deploy", "healthcheck":
 			section = key
 			sectionIndent = indent
 		default:

@@ -904,6 +904,15 @@ func (s *Store) ListTraffic(vmID string, limit int) []*types.TrafficEntry {
 	return out
 }
 
+// ClearTraffic empties every VM's in-memory traffic ring (DELETE /traffic).
+func (s *Store) ClearTraffic() {
+	s.trafficMu.Lock()
+	defer s.trafficMu.Unlock()
+	for id := range s.traffic {
+		delete(s.traffic, id)
+	}
+}
+
 // --- Log ring buffer (in-memory only) ---
 
 func (s *Store) AppendLog(vmID, line string) {

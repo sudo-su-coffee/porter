@@ -29,7 +29,7 @@ A self-hosted PaaS, one codebase. You give it a Docker/OCI image (or `docker-com
 - Real wire-level DNS server — `.local` resolver only today.
 - TLS / ACME / Let's Encrypt — not yet; `handleVerifyDomain` still reports "verified" as a stub.
 - Real host-port binding — compose `parsePort` drops host port ("8080:80" keeps only 80).
-- A few analytics / crons / firewall / cache-purge routes may return empty `{}`.
+- Wired 2026-08 to real store/runtime: cache purge/path, env branch/domain, environments/available, pool/drain, host/kernel probe, groups PATCH/DELETE, password forgot/reset (single-tenant policy), builds GET/POST split. Remaining gaps: wire-level DNS server, TLS/ACME, real host-port binding, real volumes, per-user RBAC.
 - Real persistent volumes — DB row only (nothing boots a block device).
 
 ## PHASE NEXT — what's needed (maintainer directives + PLAN.md; mark [planned] until seen in source)

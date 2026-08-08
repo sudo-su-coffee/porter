@@ -57,6 +57,15 @@ type Config struct {
 	SSHEnabled        bool   // SSH gateway (needs a task.Exec bridge; off by default)
 	SSHListenAddr     string
 
+	// Optional Redis read-through cache. Disabled by default — every cache
+	// call is a no-op and the store never touches Redis. When enabled, hot
+	// read paths (projects, VMs/replicas, orgs, domains, deployments, builds,
+	// image library) are served from Redis for CacheTTLSeconds before falling
+	// through to Postgres.
+	CacheEnabled    bool
+	CacheURL        string // e.g. redis://localhost:6379/0
+	CacheTTLSeconds int    // seconds cached reads stay fresh (<=0 keeps default)
+
 	AdminUsername string
 	AdminPassword string
 }
@@ -79,6 +88,8 @@ func LoadConfig(path string) (*Config, error) {
 		FirecrackerBin:    "firecracker",
 		GatewayListenAddr: ":80",
 		SSHListenAddr:     ":2222",
+		CacheURL:          "redis://localhost:6379/0",
+		CacheTTLSeconds:   15,
 		AdminUsername:     "admin",
 	}
 

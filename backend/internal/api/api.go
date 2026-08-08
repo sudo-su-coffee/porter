@@ -84,7 +84,6 @@ type API struct {
 	drains       map[string][]any
 	redirects    map[string][]any
 	firewall     map[string][]any
-	members      map[string][]any
 	environments map[string][]any
 	hooks        map[string][]any
 	volumes      map[string]any // volumeId -> any
@@ -112,7 +111,6 @@ func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManage
 		drains:       map[string][]any{},
 		redirects:    map[string][]any{},
 		firewall:     map[string][]any{},
-		members:      map[string][]any{},
 		environments: map[string][]any{},
 		hooks:        map[string][]any{},
 		volumes:      map[string]any{},
@@ -655,54 +653,102 @@ func (a *API) handleDeleteCurrentOrg(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleListOrgMembers(w http.ResponseWriter, r *http.Request) {
 	orgID := a.orgIDFromHeader(r)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"org_id":  orgID,
-		"members": []map[string]any{},
-	})
+	members := make([]map[string]any, 0, len(a.store.ListUsers()))
+	for _, u := range a.store.ListUsers() {
+		members = append(members, map[string]any{"user_id": u.ID, "username": u.Username, "role": u.Role})
+	}
+	// The bootstrap admin is always a member.
+	members = append(members, map[string]any{"user_id": a.adminUser, "username": a.adminUser, "role": "owner"})
+	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "members": members})
 }
 
 func (a *API) handleAddOrgMember(w http.ResponseWriter, r *http.Request) {
-	// uses org from header; body contains user details
-	writeJSON(w, http.StatusOK, map[string]any{"status": "added"})
+	// Adds a real user account (the org is single-tenant; membership = user list).
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Role     string `json:"role"`
+	}
+	_ = readJSON(r, &req)
+	if req.Username == "" {
+		writeError(w, http.StatusBadRequest, "username is required")
+		return
+	}
+	if req.Role == "" {
+		req.Role = "member"
+	}
+	salt := store.NewID()
+	u := &types.User{ID: store.NewID(), Username: req.Username, Role: req.Role, Salt: salt, PasswordHash: passwordHash(req.Password, salt), CreatedAt: time.Now()}
+	a.store.PutUser(u)
+	a.store.AppendDaemonLog(fmt.Sprintf("org member %s added (role %s)", req.Username, req.Role))
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "added", "user": map[string]any{"id": u.ID, "username": u.Username, "role": u.Role}})
 }
 
 func (a *API) handlePatchOrgMember(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
-	// orgID from header
-	_ = username
-	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "username": username})
+	var req struct {
+		Role string `json:"role"`
+	}
+	_ = readJSON(r, &req)
+	if u, ok := a.store.GetUserByUsername(username); ok {
+		if req.Role != "" {
+			u.Role = req.Role
+			a.store.PutUser(u)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "username": username, "role": u.Role})
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]any{"status": "user not found", "username": username})
 }
 
 func (a *API) handleRemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
-	_ = username
-	writeJSON(w, http.StatusOK, map[string]any{"status": "removed", "username": username})
+	if u, ok := a.store.GetUserByUsername(username); ok {
+		a.store.DeleteUser(u.ID)
+		a.store.AppendDaemonLog("org member " + username + " removed")
+		writeJSON(w, http.StatusOK, map[string]any{"status": "removed", "username": username})
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]any{"status": "user not found", "username": username})
 }
 
 func (a *API) handleOrgAudit(w http.ResponseWriter, r *http.Request) {
 	orgID := a.orgIDFromHeader(r)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"org_id": orgID,
-		"events": []map[string]any{},
-	})
+	// Audit trail comes from the durable daemon log (best-effort, real data).
+	logs := a.store.TailDaemonLogs(100)
+	events := make([]map[string]any, 0, len(logs))
+	for _, l := range logs {
+		events = append(events, map[string]any{"event": l, "ts": time.Now()})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "events": events})
 }
 
 func (a *API) handleOrgTransfer(w http.ResponseWriter, r *http.Request) {
-	// Accept new owner email in body
 	var req struct {
 		NewOwnerEmail string `json:"new_owner_email"`
 	}
 	_ = readJSON(r, &req)
-	// Use org from header
-	writeJSON(w, http.StatusOK, map[string]any{"status": "transferred", "to": req.NewOwnerEmail})
+	orgID := a.orgIDFromHeader(r)
+	if org, ok := a.store.GetOrg(orgID); ok {
+		org.OwnerID = req.NewOwnerEmail
+		_ = a.store.PutOrg(org)
+		a.store.AppendDaemonLog(fmt.Sprintf("org %s transferred to %s", org.Name, req.NewOwnerEmail))
+		writeJSON(w, http.StatusOK, map[string]any{"status": "transferred", "to": req.NewOwnerEmail, "org": org})
+		return
+	}
+	writeError(w, http.StatusNotFound, "no org set")
 }
 
 func (a *API) handleOrgEvents(w http.ResponseWriter, r *http.Request) {
 	orgID := a.orgIDFromHeader(r)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"org_id": orgID,
-		"events": []map[string]any{},
-	})
+	for _, p := range a.store.ListProjectsByOrg(orgID) {
+		events := a.store.ListHealthEvents(p.ID, 10)
+		if len(events) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "events": events})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "events": []any{}})
 }
 
 // ListOrgs, DefaultOrg, CreateOrg, GetOrg, PatchOrg, DeleteOrg unchanged (they don't need org header)
@@ -786,6 +832,8 @@ func (a *API) groupsAll() []*types.Group {
 type createProjectReq struct {
 	Name          string             `json:"name"`
 	Image         string             `json:"image"`
+	GitURL        string             `json:"git_url"`
+	Branch        string             `json:"branch"`
 	ComposeYAML   string             `json:"compose_yaml"`
 	OrgID         string             `json:"org_id"`
 	GroupID       string             `json:"group_id"`
@@ -831,11 +879,15 @@ func (a *API) createProjectFrom(w http.ResponseWriter, req createProjectReq) {
 		}
 	}
 	projID := store.NewID()
+	source := "image"
+	if req.GitURL != "" {
+		source = "git"
+	}
 	proj := &types.Project{
 		ID:              projID,
 		OrgID:           orgID,
 		Name:            req.Name,
-		Source:          "image",
+		Source:          source,
 		Image:           req.Image,
 		Network:         "10.42.0.0/16",
 		HostMountPath:   req.HostMountPath,
@@ -857,6 +909,28 @@ func (a *API) createProjectFrom(w http.ResponseWriter, req createProjectReq) {
 	if req.GroupID != "" {
 		_ = a.store.AddProjectToGroup(req.GroupID, projID)
 	}
+
+	// Git deploys build first: a Build row is queued and cloned/baked
+	// asynchronously; replicas are booted once the image is ready.
+	if req.GitURL != "" {
+		b := &types.Build{ID: store.NewID(), ProjectID: projID, GitURL: req.GitURL, Branch: orDefault(req.Branch, "main"), BuildStatus: "building", CreatedAt: time.Now()}
+		a.store.PutBuild(b)
+		a.store.AppendBuildLog(projID, "git project queued: "+req.GitURL)
+		a.runGitBuildCtx(b)
+		for i := 0; i < req.Replicas; i++ {
+			rr := req
+			rr.Image = b.Image
+			if rr.Image != "" {
+				rr.Name = req.Name
+				a.bootReplica(proj, rr, i)
+			}
+		}
+		_ = a.store.CreateDeployment(&types.Deployment{ID: store.NewID(), ProjectID: projID, BuildStatus: b.BuildStatus, ImageDigest: b.Image, GitURL: req.GitURL, CreatedAt: time.Now()})
+		a.store.AppendDaemonLog(fmt.Sprintf("project %s created via git (%s)", req.Name, req.GitURL))
+		writeJSON(w, http.StatusAccepted, map[string]any{"project": proj, "status": "building"})
+		return
+	}
+
 	for i := 0; i < req.Replicas; i++ {
 		a.bootReplica(proj, req, i)
 	}
@@ -915,9 +989,12 @@ func (a *API) secretsEnv(proj *types.Project) map[string]string {
 		}
 	}
 	for _, sec := range a.store.ListSecrets(proj.ID) {
-		if val, err := a.decryptSecret(sec.ValueEncrypted); err == nil {
-			merged[sec.Name] = val
+		val, err := a.decryptSecret(sec.ValueEncrypted)
+		if err != nil {
+			a.store.AppendDaemonLog(fmt.Sprintf("secret %q for project %s could not be decrypted (%v)", sec.Name, proj.ID, err))
+			continue
 		}
+		merged[sec.Name] = val
 	}
 	return merged
 }
@@ -1054,12 +1131,21 @@ func (a *API) handleImportProject(w http.ResponseWriter, r *http.Request) {
 // Project members – use username instead of userId
 // ----------------------------------------------------------------------------
 
+// memberOf resolves a project member's user id for the current request user
+// (header, else admin). Memberships are persisted in project_members.
+func (a *API) memberUserID(r *http.Request) string {
+	if uid := r.Header.Get(HeaderUserID); uid != "" {
+		return uid
+	}
+	return a.adminUser
+}
+
 func (a *API) handleGetProjectMember(w http.ResponseWriter, r *http.Request) {
-	username := r.PathValue("username")
 	pid := a.projectID(r)
-	for _, m := range a.members[pid] {
-		if mm, ok := m.(map[string]any); ok && mm["username"] == username {
-			writeJSON(w, http.StatusOK, map[string]any{"member": mm})
+	for _, m := range a.store.ListProjectMembers(pid) {
+		u, _ := a.store.GetUserByUsername(r.PathValue("username"))
+		if u != nil && u.ID == m.UserID {
+			writeJSON(w, http.StatusOK, map[string]any{"member": m, "username": u.Username})
 			return
 		}
 	}
@@ -1067,47 +1153,68 @@ func (a *API) handleGetProjectMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePatchProjectMember(w http.ResponseWriter, r *http.Request) {
-	username := r.PathValue("username")
 	pid := a.projectID(r)
-	for i, m := range a.members[pid] {
-		if mm, ok := m.(map[string]any); ok && mm["username"] == username {
-			var req map[string]any
-			_ = readJSON(r, &req)
-			for k, v := range req {
-				mm[k] = v
-			}
-			a.members[pid][i] = mm
-			writeJSON(w, http.StatusOK, map[string]any{"member": mm})
-			return
+	var req struct {
+		Role string `json:"role"`
+	}
+	_ = readJSON(r, &req)
+	u, found := a.store.GetUserByUsername(r.PathValue("username"))
+	if !found {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	updated := false
+	for _, m := range a.store.ListProjectMembers(pid) {
+		if m.UserID == u.ID {
+			m.Role = req.Role
+			a.store.PutProjectMember(m)
+			updated = true
+			break
 		}
 	}
-	writeError(w, http.StatusNotFound, "member not found")
+	if !updated {
+		writeError(w, http.StatusNotFound, "member not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"member": req.Role, "username": r.PathValue("username")})
 }
 
 func (a *API) handleRemoveProjectMember(w http.ResponseWriter, r *http.Request) {
-	username := r.PathValue("username")
 	pid := a.projectID(r)
-	out := []any{}
-	for _, m := range a.members[pid] {
-		if mm, ok := m.(map[string]any); ok && mm["username"] == username {
-			continue
-		}
-		out = append(out, m)
+	u, found := a.store.GetUserByUsername(r.PathValue("username"))
+	if !found {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
 	}
-	a.members[pid] = out
+	a.store.DeleteProjectMember(pid, u.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "removed"})
 }
 
-// handleAddProjectMember and handleInviteMember ensure username field in member map:
+// handleAddProjectMember persists a membership (project_members row).
 func (a *API) handleAddProjectMember(w http.ResponseWriter, r *http.Request) {
-	var req map[string]any
-	_ = readJSON(r, &req)
-	m := map[string]any{"id": store.NewID(), "role": "member", "username": req["username"]}
-	for k, v := range req {
-		m[k] = v
+	var req struct {
+		Username string `json:"username"`
+		Role     string `json:"role"`
 	}
-	a.members[a.projectID(r)] = append(a.members[a.projectID(r)], m)
-	writeJSON(w, http.StatusCreated, map[string]any{"member": m})
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.Username == "" {
+		writeError(w, http.StatusBadRequest, "username is required")
+		return
+	}
+	if req.Role == "" {
+		req.Role = "member"
+	}
+	u, found := a.store.GetUserByUsername(req.Username)
+	if !found {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	m := &types.ProjectMember{ProjectID: a.projectID(r), UserID: u.ID, Role: req.Role, CreatedAt: time.Now()}
+	a.store.PutProjectMember(m)
+	writeJSON(w, http.StatusCreated, map[string]any{"member": m, "username": u.Username})
 }
 
 func (a *API) handleInviteMember(w http.ResponseWriter, r *http.Request) {
@@ -1116,15 +1223,17 @@ func (a *API) handleInviteMember(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 	}
 	_ = readJSON(r, &req)
-	m := map[string]any{
-		"id":       store.NewID(),
-		"email":    req.Email,
-		"username": req.Username,
-		"role":     "member",
-		"invited":  true,
+	u, found := a.store.GetUserByUsername(req.Username)
+	if !found {
+		// No account yet → record the invite with the pending marker only.
+		m := &types.ProjectMember{ProjectID: a.projectID(r), UserID: store.NewID(), Role: "member", Invited: true, CreatedAt: time.Now()}
+		a.store.PutProjectMember(m)
+		writeJSON(w, http.StatusCreated, map[string]any{"member": m, "email": req.Email, "invited": true})
+		return
 	}
-	a.members[a.projectID(r)] = append(a.members[a.projectID(r)], m)
-	writeJSON(w, http.StatusCreated, map[string]any{"member": m})
+	m := &types.ProjectMember{ProjectID: a.projectID(r), UserID: u.ID, Role: "member", Invited: true, CreatedAt: time.Now()}
+	a.store.PutProjectMember(m)
+	writeJSON(w, http.StatusCreated, map[string]any{"member": m, "email": req.Email, "username": u.Username, "invited": true})
 }
 
 // ----------------------------------------------------------------------------

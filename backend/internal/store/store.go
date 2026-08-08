@@ -625,15 +625,22 @@ func (s *Store) TailBuildLogs(projectID string, n int) []string {
 
 func (s *Store) CreateDeployment(d *types.Deployment) error {
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO deployments (id, project_id, build_status, image_digest, rollback_to, created_at)
-		VALUES ($1,$2,$3,$4,$5, now())`,
-		d.ID, nullableStr(d.ProjectID), d.BuildStatus, nullableStr(d.ImageDigest), nullableStr(d.RollbackTo))
+		INSERT INTO deployments (id, project_id, build_status, image_digest, rollback_to, git_url, git_commit, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+		ON CONFLICT (id) DO UPDATE SET
+			build_status = EXCLUDED.build_status,
+			image_digest = EXCLUDED.image_digest,
+			rollback_to  = EXCLUDED.rollback_to,
+			git_url      = EXCLUDED.git_url,
+			git_commit   = EXCLUDED.git_commit`,
+		d.ID, nullableStr(d.ProjectID), d.BuildStatus, nullableStr(d.ImageDigest),
+		nullableStr(d.RollbackTo), nullableStr(d.GitURL), nullableStr(d.GitCommit))
 	return err
 }
 
 func (s *Store) ListDeployments(projectID string) []*types.Deployment {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, project_id, build_status, image_digest, created_at FROM deployments
+		SELECT id, project_id, build_status, image_digest, COALESCE(rollback_to,''), git_url, git_commit, created_at FROM deployments
 		WHERE project_id = $1 ORDER BY revision DESC`, projectID)
 	if err != nil {
 		log.Printf("store: list deployments for %s: %v", projectID, err)
@@ -643,7 +650,8 @@ func (s *Store) ListDeployments(projectID string) []*types.Deployment {
 	out := make([]*types.Deployment, 0)
 	for rows.Next() {
 		var d types.Deployment
-		if err := rows.Scan(&d.ID, &d.ProjectID, &d.BuildStatus, &d.ImageDigest, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.BuildStatus, &d.ImageDigest,
+			&d.RollbackTo, &d.GitURL, &d.GitCommit, &d.CreatedAt); err != nil {
 			continue
 		}
 		out = append(out, &d)
@@ -889,7 +897,78 @@ func (s *Store) AddTraffic(vmID string, e *types.TrafficEntry) {
 		buf = buf[len(buf)-trafficRingSize:]
 	}
 	s.traffic[vmID] = buf
+	s.persistTraffic(vmID, e)
 }
+
+// persistTraffic writes a traffic entry to the durable traffic_logs table
+// best-effort and non-blocking, so analytics survive restarts. Errors are
+// logged once at low volume, never propagated to the hot path.
+func (s *Store) persistTraffic(vmID string, e *types.TrafficEntry) {
+	if s.pool == nil || e == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		method := e.Method
+		if method == "" {
+			method = "GET"
+		}
+		_, err := s.pool.Exec(ctx, `
+			INSERT INTO traffic_logs (vm_id, method, host, path, status, duration_ms, remote_ip, ts)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			nullableStr(vmID), method, e.Host, e.Path, e.Status, e.DurationMS, e.RemoteIP, e.Timestamp)
+		if err != nil {
+			log.Printf("store: persist traffic: %v", err)
+		}
+	}()
+}
+
+// ListTrafficLogs returns durable traffic rows for a project (newest first),
+// used by the analytics endpoints when a ring has rolled over.
+func (s *Store) ListTrafficLogs(projectID string, limit int) []*types.TrafficEntry {
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT method, host, path, status, duration_ms, remote_ip, ts FROM traffic_logs
+		WHERE project_id = $1 ORDER BY ts DESC LIMIT $2`,
+		nullableStr(projectID), limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.TrafficEntry, 0, limit)
+	for rows.Next() {
+		var e types.TrafficEntry
+		if err := rows.Scan(&e.Method, &e.Host, &e.Path, &e.Status, &e.DurationMS, &e.RemoteIP, &e.Timestamp); err != nil {
+			continue
+		}
+		out = append(out, &e)
+	}
+	return out
+}
+
+// UpsertDailyAnalytics increments the per-day request/bandwidth counters so the
+// analytics endpoints can show durable historical usage beyond the ring.
+func (s *Store) UpsertDailyAnalytics(projectID string, requests, bandwidth, invocations int) {
+	if s.pool == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _ = s.pool.Exec(ctx, `
+			INSERT INTO analytics_daily (project_id, day, requests, bandwidth, invocations)
+			VALUES ($1, CURRENT_DATE, $2, $3, $4)
+			ON CONFLICT (project_id, day) DO UPDATE SET
+				requests=analytics_daily.requests + EXCLUDED.requests,
+				bandwidth=analytics_daily.bandwidth + EXCLUDED.bandwidth,
+				invocations=analytics_daily.invocations + EXCLUDED.invocations`,
+			nullableStr(projectID), requests, bandwidth, invocations)
+	}()
+}
+
 
 func (s *Store) ListTraffic(vmID string, limit int) []*types.TrafficEntry {
 	s.trafficMu.RLock()
@@ -909,6 +988,16 @@ func (s *Store) ClearTraffic() {
 	s.trafficMu.Lock()
 	defer s.trafficMu.Unlock()
 	for id := range s.traffic {
+		delete(s.traffic, id)
+	}
+}
+
+// ClearTrafficFor empties the traffic ring for a specific set of VMs, scoping
+// a cache purge to its own project (never wipes another tenant's analytics).
+func (s *Store) ClearTrafficFor(vmIDs []string) {
+	s.trafficMu.Lock()
+	defer s.trafficMu.Unlock()
+	for _, id := range vmIDs {
 		delete(s.traffic, id)
 	}
 }

@@ -13,7 +13,7 @@ auto_migrate = true
 
 [firecracker]
 containerd_socket = "/run/containerd/containerd.sock"
-snapshotter       = "overlayfs"   # WSL2-friendly; switch to devmapper on a full Linux host if provisioned
+snapshotter       = "devmapper"   # WSL2-friendly; switch to devmapper on a full Linux host if provisioned
 namespace         = "porter"
 logs_dir          = "/var/log/porter"
 images_dir        = "vms/images"

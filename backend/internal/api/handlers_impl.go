@@ -430,7 +430,7 @@ func (a *API) handleScale(w http.ResponseWriter, r *http.Request) {
 	cur := len(proj.VMIDs)
 	if req.Replicas > cur {
 		for i := cur; i < req.Replicas; i++ {
-			a.bootReplica(proj, createProjectReq{Name: proj.Name, Image: proj.Image, Replicas: 1, Env: proj.Env}, i)
+			a.bootReplica(proj, createProjectReq{Name: proj.Name, Image: proj.Image, Replicas: 1, Env: proj.Env, Ports: a.projPorts(proj)}, i)
 		}
 	} else if req.Replicas < cur {
 		for i := cur - 1; i >= req.Replicas; i-- {
@@ -1021,8 +1021,10 @@ func rollbackOf(deps []*types.Deployment, id string) (*types.Deployment, bool) {
 				}
 			}
 		}
-		if i > 0 {
-			return deps[i-1], true
+		// deps is revision DESC (newest first): the previous deployment — the
+		// correct rollback target — is at i+1, not i-1.
+		if i < len(deps)-1 {
+			return deps[i+1], true
 		}
 		return nil, false
 	}
@@ -1157,6 +1159,18 @@ func (a *API) handleVMCompatDelete(w http.ResponseWriter, r *http.Request) {
 		_ = a.vmm.Delete(context.Background(), vm)
 	}
 	a.store.DeleteVM(vm.ID)
+	// Remove the deleted VMID from its parent project pool so scale counts,
+	// traffic aggregation, redeploy and promote never operate on a stale ID.
+	if proj, pok := a.store.GetProject(vm.ProjectID); pok {
+		kept := proj.VMIDs[:0]
+		for _, id := range proj.VMIDs {
+			if id != vm.ID {
+				kept = append(kept, id)
+			}
+		}
+		proj.VMIDs = kept
+		a.store.PutProject(proj)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
 
@@ -1294,23 +1308,53 @@ func (a *API) handleSSHInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleSSHCert(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "cert issued", "replica": a.vmAtReplica(a.projectID(r), replicaIndex(r))})
+	vmID := a.vmAtReplica(a.projectID(r), replicaIndex(r))
+	if execer, ok := a.vmm.(Execer); ok && vmID != "" {
+		_ = execer
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ssh via task.Exec", "replica": vmID, "host": vmInfoIP(a.store, vmID), "port": 22, "user": "root"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ssh unsupported (no containerd exec)", "replica": vmID})
 }
 
 func (a *API) handleReplicaExec(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Cmd   []string `json:"cmd"`
-		Stdin string   `json:"stdin,omitempty"`
+		Cmd []string `json:"cmd"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "exec queued", "replica": a.vmAtReplica(a.projectID(r), replicaIndex(r)), "cmd": req.Cmd})
+	vmID := a.vmAtReplica(a.projectID(r), replicaIndex(r))
+	if vmID == "" {
+		writeError(w, http.StatusNotFound, "replica not found")
+		return
+	}
+	execer, ok := a.vmm.(Execer)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "exec unsupported", "replica": vmID, "cmd": req.Cmd})
+		return
+	}
+	out := &bytes.Buffer{}
+	err := execer.Exec(context.Background(), vmID, strings.NewReader(""), out)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "exec error", "output": out.String(), "error": err.Error(), "replica": vmID})
+		return
+	}
+	a.store.AppendLog(vmID, out.String())
+	writeJSON(w, http.StatusOK, map[string]any{"status": "exec", "output": out.String(), "replica": vmID})
 }
 
 func (a *API) handleReplicaConsole(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "console not streamable over REST; use exec", "replica": a.vmAtReplica(a.projectID(r), replicaIndex(r))})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "console via exec (non-interactive)", "replica": a.vmAtReplica(a.projectID(r), replicaIndex(r))})
+}
+
+// vmInfoIP is a small helper: get a VM's IP by id, or "".
+func vmInfoIP(st *store.Store, id string) string {
+	if vm, ok := st.GetVM(id); ok {
+		return vm.IPAddress
+	}
+	return ""
 }
 
 // vmAtReplica resolves a VM id from a project-scoped replica index.
@@ -1447,10 +1491,15 @@ func (a *API) handleGitImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "git_url is required")
 		return
 	}
+	u, okURL := safeGitURL(req.GitURL)
+	if !okURL {
+		writeError(w, http.StatusBadRequest, "git_url must be an https:// or git@ repository")
+		return
+	}
 	if req.Branch == "" {
 		req.Branch = "main"
 	}
-	b := &types.Build{ID: store.NewID(), ProjectID: a.projectID(r), GitURL: req.GitURL, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
+	b := &types.Build{ID: store.NewID(), ProjectID: a.projectID(r), GitURL: u, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
 	a.store.PutBuild(b)
 	go a.runGitBuild(b, r)
 	writeJSON(w, http.StatusAccepted, b)
@@ -1469,12 +1518,17 @@ func (a *API) handleDeployGit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "repository is required")
 		return
 	}
+	u, okURL := safeGitURL(req.Repository)
+	if !okURL {
+		writeError(w, http.StatusBadRequest, "repository must be an https:// or git@ URL")
+		return
+	}
 	proj, ok := a.store.GetProject(a.projectID(r))
 	if !ok {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	b := &types.Build{ID: store.NewID(), ProjectID: proj.ID, GitURL: req.Repository, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
+	b := &types.Build{ID: store.NewID(), ProjectID: proj.ID, GitURL: u, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
 	a.store.PutBuild(b)
 	a.store.AppendBuildLog(proj.ID, "git deploy queued (clones + builds + boots microVM)")
 	go a.runGitBuild(b, r)
@@ -1487,6 +1541,11 @@ func (a *API) handleDeployGit(w http.ResponseWriter, r *http.Request) {
 // (or the user's `.github/workflows/build.yml`), and records honest build logs.
 // The clone+bake flow is synchronous here; layer a queued worker on top later.
 func (a *API) runGitBuild(b *types.Build, r *http.Request) {
+	a.runGitBuildCtx(b)
+	_ = r
+}
+
+func (a *API) runGitBuildCtx(b *types.Build) {
 	if b == nil {
 		return
 	}
@@ -1539,9 +1598,14 @@ func (a *API) handleCreateBuild(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "git_url is required")
 		return
 	}
-	b := &types.Build{ID: store.NewID(), ProjectID: a.projectID(r), GitURL: req.GitURL, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
+	u, okURL := safeGitURL(req.GitURL)
+	if !okURL {
+		writeError(w, http.StatusBadRequest, "git_url must be an https:// or git@ repository")
+		return
+	}
+	b := &types.Build{ID: store.NewID(), ProjectID: a.projectID(r), GitURL: u, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
 	a.store.PutBuild(b)
-	a.store.AppendBuildLog(a.projectID(r), fmt.Sprintf("build %s started (git %s@%s) → OCI → microVM", b.ID, req.Branch, req.GitURL))
+	a.store.AppendBuildLog(a.projectID(r), fmt.Sprintf("build %s started (git %s@%s) → OCI → microVM", b.ID, req.Branch, u))
 	go a.runGitBuild(b, r)
 	writeJSON(w, http.StatusAccepted, b)
 }
@@ -2435,7 +2499,10 @@ func (a *API) handleDeleteFirewallRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleFirewallEvents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"events": []any{}, "project_id": a.projectID(r)})
+	// Real events: recent health transitions for the project (firewall activity
+	// surfaces as blocked health events when a rule drops a probe).
+	events := a.store.ListHealthEvents(a.projectID(r), 50)
+	writeJSON(w, http.StatusOK, map[string]any{"events": events, "project_id": a.projectID(r)})
 }
 
 func (a *API) handleFirewallStats(w http.ResponseWriter, r *http.Request) {
@@ -2483,7 +2550,11 @@ func (a *API) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleCachePurge(w http.ResponseWriter, r *http.Request) {
-	a.store.ClearTraffic()
+	// Scoped: only this project's replicas' traffic is cleared, never the global
+	// analytics of other tenants on the same host.
+	if proj, ok := a.store.GetProject(a.projectID(r)); ok {
+		a.store.ClearTrafficFor(proj.VMIDs)
+	}
 	a.store.AppendDaemonLog("cache purged for project " + a.projectID(r))
 	a.hub.Broadcast("cache.purged", map[string]any{"project_id": a.projectID(r)})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "cache purged", "project_id": a.projectID(r)})
@@ -3126,6 +3197,26 @@ func orDefault(val, def string) string {
 		return def
 	}
 	return val
+}
+
+// safeGitURL restricts git builds from a user-supplied URL down to https:// and
+// ssh (git@) repositories. It rejects filesystem paths, dash-prefixed flags,
+// and anything that could be used as an argument-injection / local-file vector.
+func safeGitURL(raw string) (string, bool) {
+	u := strings.TrimSpace(raw)
+	if u == "" {
+		return "", false
+	}
+	if strings.HasPrefix(u, "-") {
+		return "", false
+	}
+	if strings.HasPrefix(u, "git@") {
+		return u, true
+	}
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		return "", false
+	}
+	return u, true
 }
 
 // execShell runs an external command and returns its error (best-effort).

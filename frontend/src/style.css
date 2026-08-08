@@ -287,6 +287,61 @@ main { max-width: 1220px; padding: 28px 30px 96px; }
 }
 .seg button:hover { color: var(--text); }
 .seg button.active { background: var(--bg-elev-2); color: var(--text); box-shadow: var(--shadow-sm); }
+.seg button.active .seg-count { color: var(--accent-strong); border-color: rgba(91, 140, 255, 0.35); }
+.seg-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  margin-left: 5px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  vertical-align: 1px;
+}
+.filter-search { flex: 1; min-width: 160px; max-width: 300px; }
+.filter-spacer { flex: 1; }
+.clear-btn {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.clear-btn:hover { color: var(--text); background: var(--bg-elev-2); }
+
+/* Layout toggle (list vs grid) for the Deployments dashboard */
+.view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  flex-shrink: 0;
+}
+.view-toggle button {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.view-toggle button:hover { color: var(--text); }
+.view-toggle button.active { background: var(--bg-elev-2); color: var(--text); box-shadow: var(--shadow-sm); }
 
 /* ---------- Inline actions ---------- */
 .actions { display: inline-flex; gap: 6px; }
@@ -372,6 +427,35 @@ main { max-width: 1220px; padding: 28px 30px 96px; }
 .image-card-meta { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin-bottom: 8px; }
 .image-tag { font-size: 10.5px; font-weight: 600; color: var(--text-dim); background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
 .image-card-hint { font-size: 11.5px; color: var(--text-dim); min-height: 30px; }
+
+/* ---------- Project card grid (Deployments dashboard) ---------- */
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; align-items: start; }
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.project-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pc-name { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
+.pc-image { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: 2px; word-break: break-all; }
+.pc-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.pc-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.pc-stat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); margin-bottom: 2px; }
+.pc-stat-value { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 
 /* ---------- Terminal / logs ---------- */
 .terminal {

@@ -2621,6 +2621,139 @@ func (a *API) handleGlobalAnalyticsTimeseries(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{"series": series})
 }
 
+// handleUsage aggregates platform-wide usage counters across every project's
+// traffic ring — Vercel-style "usage" metering: edge requests, data transfer,
+// function invocations, and request latency. Supports ?period=24h|7d|30d to
+// bracket the timeseries (defaults to 24h).
+func (a *API) handleUsage(w http.ResponseWriter, r *http.Request) {
+	period := usagePeriod(r)
+	since := time.Now().Add(-period)
+	var reqs, funcIn int64
+	var bytesIn, bytesOut int64
+	byDay := map[string]map[string]int64{}
+	projects := map[string]map[string]int64{}
+	for _, vm := range a.store.ListVMs() {
+		if vm == nil {
+			continue
+		}
+		for _, e := range a.store.ListTraffic(vm.ID, 2000) {
+			if e.Timestamp.Before(since) {
+				continue
+			}
+			reqs++
+			bytesIn += e.BytesIn
+			bytesOut += e.BytesOut
+			if isFunctionPath(e.Path) {
+				funcIn++
+			}
+			day := e.Timestamp.Format("2006-01-02")
+			if byDay[day] == nil {
+				byDay[day] = map[string]int64{}
+			}
+			byDay[day]["requests"]++
+			byDay[day]["bandwidth"] += e.BytesIn + e.BytesOut
+			pid := vm.ProjectID
+			if projects[pid] == nil {
+				projects[pid] = map[string]int64{}
+			}
+			projects[pid]["requests"]++
+			projects[pid]["bandwidth"] += e.BytesIn + e.BytesOut
+		}
+	}
+	// Build a dense day series (fills missing days with zeroes).
+	days := make([]map[string]any, 0)
+	for d := since.Truncate(24 * time.Hour); !d.After(time.Now()); d = d.Add(24 * time.Hour) {
+		key := d.Format("2006-01-02")
+		b := byDay[key]
+		if b == nil {
+			b = map[string]int64{}
+		}
+		days = append(days, map[string]any{
+			"date":      key,
+			"requests":  b["requests"],
+			"bandwidth": b["bandwidth"],
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"period":               period.String(),
+		"edge_requests":        reqs,
+		"function_invocations": funcIn,
+		"fast_data_transfer":   bytesIn + bytesOut,
+		"data_transfer_in":     bytesIn,
+		"data_transfer_out":    bytesOut,
+		"projects":             len(a.store.ListProjects()),
+		"series":               days,
+		"by_project":           projects,
+	})
+}
+
+// handleUsageBandwidth returns the platform-wide transferred bytes (in+out).
+func (a *API) handleUsageBandwidth(w http.ResponseWriter, r *http.Request) {
+	period := defaultPeriod(r)
+	since := time.Now().Add(-period)
+	var in, out int64
+	for _, vm := range a.store.ListVMs() {
+		for _, e := range a.store.ListTraffic(vm.ID, 2000) {
+			if e.Timestamp.Before(since) {
+				continue
+			}
+			in += e.BytesIn
+			out += e.BytesOut
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bandwidth_bytes": in + out,
+		"bytes_in":        in,
+		"bytes_out":       out,
+		"period":          period,
+	})
+}
+
+// handleUsageRequests reports platform-wide request volume + function invocations.
+func (a *API) handleUsageRequests(w http.ResponseWriter, r *http.Request) {
+	period := defaultPeriod(r)
+	since := time.Now().Add(-period)
+	var reqs, funcIn int64
+	for _, vm := range a.store.ListVMs() {
+		for _, e := range a.store.ListTraffic(vm.ID, 2000) {
+			if e.Timestamp.Before(since) {
+				continue
+			}
+			reqs++
+			if isFunctionPath(e.Path) {
+				funcIn++
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"edge_requests":      reqs,
+		"function_invocations": funcIn,
+		"period":             period,
+	})
+}
+
+// defaultPeriod resolves the ?period= window (24h|7d|30d), default 30d.
+func defaultPeriod(r *http.Request) time.Duration {
+	switch r.URL.Query().Get("period") {
+	case "24h":
+		return 24 * time.Hour
+	case "7d":
+		return 7 * 24 * time.Hour
+	default:
+		return 30 * 24 * time.Hour
+	}
+}
+
+// usagePeriod is an alias of defaultPeriod kept for symmetric naming.
+func usagePeriod(r *http.Request) time.Duration { return defaultPeriod(r) }
+
+// isFunctionPath heuristically treats /api/**, /functions/**, and .*/fn.*
+// paths as serverless-function invocations (mirrors the Vercel function
+// metering semantics for the dashboard).
+func isFunctionPath(p string) bool {
+	return strings.HasPrefix(p, "/api/") || strings.HasPrefix(p, "/functions/") || strings.Contains(p, "/fn/")
+}
+
 // ---------------------------------------------------------------------------
 // Firewall / Cache / Volumes
 // ---------------------------------------------------------------------------

@@ -1819,6 +1819,100 @@ func (s *Store) DeleteProjectMember(projectID, userID string) bool {
 	return res.RowsAffected() > 0
 }
 
+// RolePermissions returns the permission codes granted to a role via the
+// role_permissions table. Empty for unknown roles.
+func (s *Store) RolePermissions(roleID string) []string {
+	if roleID == "" {
+		return nil
+	}
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT permission_id FROM role_permissions WHERE role_id = $1`, roleID)
+	if err != nil {
+		log.Printf("store: role permissions for %s: %v", roleID, err)
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// HasPermission reports whether a user's GLOBAL role grants the permission.
+func (s *Store) HasPermission(username, permission string) bool {
+	u, ok := s.GetUserByUsername(username)
+	if !ok {
+		return false
+	}
+	for _, p := range s.RolePermissions(u.Role) {
+		if p == permission {
+			return true
+		}
+	}
+	return false
+}
+
+// HasProjectPermission reports whether a user's role ON the project (project
+// membership → org membership → global role) grants the permission.
+func (s *Store) HasProjectPermission(projectID, username, permission string) bool {
+	role := s.ProjectRoleForUser(projectID, username)
+	if role == "" {
+		u, ok := s.GetUserByUsername(username)
+		if !ok {
+			return false
+		}
+		role = u.Role
+	}
+	return s.roleGrants(role, permission)
+}
+
+// HasOrgPermission reports whether a user's role in an org grants the permission.
+func (s *Store) HasOrgPermission(orgID, username, permission string) bool {
+	role := s.OrgRoleForUser(orgID, username)
+	if role == "" {
+		u, ok := s.GetUserByUsername(username)
+		if !ok {
+			return false
+		}
+		role = u.Role
+	}
+	return s.roleGrants(role, permission)
+}
+
+// roleGrants checks one role against one permission.
+func (s *Store) roleGrants(role, permission string) bool {
+	if role == "" {
+		return false
+	}
+	for _, p := range s.RolePermissions(role) {
+		if p == permission {
+			return true
+		}
+	}
+	return false
+}
+
+// OrgRoleForUser resolves a user's role in an org from org_members (owner or
+// member). Returns "" when the user has no membership row.
+func (s *Store) OrgRoleForUser(orgID, username string) string {
+	if orgID == "" || username == "" {
+		return ""
+	}
+	var role string
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`,
+		orgID, username).Scan(&role)
+	if err != nil {
+		return ""
+	}
+	return role
+}
+
 // ProjectRoleForUser resolves a user's role on a project through the PostgreSQL
 // RBAC tables — project_members first, then org_members (via the project's org).
 // Returns "" when the user has no explicit membership row (callers then fall

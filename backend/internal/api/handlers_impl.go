@@ -3077,6 +3077,120 @@ func (a *API) handleImageStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// RBAC (roles / permissions CRUD)
+// ---------------------------------------------------------------------------
+func (a *API) handleListRoles(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.store.ListRoles())
+}
+
+func (a *API) handleGetRole(w http.ResponseWriter, r *http.Request) {
+	if role, ok := a.store.GetRole(r.PathValue("roleId")); ok {
+		writeJSON(w, http.StatusOK, role)
+		return
+	}
+	writeError(w, http.StatusNotFound, "role not found")
+}
+
+func (a *API) handleCreateRole(w http.ResponseWriter, r *http.Request) {
+	var req types.Role
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.ID == "" || req.Name == "" {
+		writeError(w, http.StatusBadRequest, "role id and name are required")
+		return
+	}
+	a.store.PutRole(&req)
+	if len(req.Permissions) > 0 {
+		_ = a.store.SetRolePermissions(req.ID, req.Permissions)
+	}
+	role, _ := a.store.GetRole(req.ID)
+	writeJSON(w, http.StatusCreated, role)
+}
+
+func (a *API) handlePatchRole(w http.ResponseWriter, r *http.Request) {
+	role, ok := a.store.GetRole(r.PathValue("roleId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "role not found")
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.Name != "" {
+		role.Name = req.Name
+	}
+	if req.Description != "" {
+		role.Description = req.Description
+	}
+	a.store.PutRole(role)
+	writeJSON(w, http.StatusOK, role)
+}
+
+func (a *API) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
+	if a.store.DeleteRole(r.PathValue("roleId")) {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
+		return
+	}
+	writeError(w, http.StatusNotFound, "role not found")
+}
+
+func (a *API) handleListPermissions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.store.ListAllPermissions())
+}
+
+// handleGetRolePermissions returns the permission codes granted to a role.
+func (a *API) handleGetRolePermissions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.store.GetRole(r.PathValue("roleId")); !ok {
+		writeError(w, http.StatusNotFound, "role not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"role":        r.PathValue("roleId"),
+		"permissions": a.store.RolePermissions(r.PathValue("roleId")),
+	})
+}
+
+// handleSetRolePermissions replaces a role's permission set.
+func (a *API) handleSetRolePermissions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.store.GetRole(r.PathValue("roleId")); !ok {
+		writeError(w, http.StatusNotFound, "role not found")
+		return
+	}
+	var req struct {
+		Permissions []string `json:"permissions"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if err := a.store.SetRolePermissions(r.PathValue("roleId"), req.Permissions); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update permissions: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"role":        r.PathValue("roleId"),
+		"permissions": a.store.RolePermissions(r.PathValue("roleId")),
+	})
+}
+
+func (a *API) handleAddRolePermission(w http.ResponseWriter, r *http.Request) {
+	a.store.AddRolePermission(r.PathValue("roleId"), r.PathValue("permissionId"))
+	writeJSON(w, http.StatusOK, map[string]any{"status": "granted"})
+}
+
+func (a *API) handleRemoveRolePermission(w http.ResponseWriter, r *http.Request) {
+	a.store.RemoveRolePermission(r.PathValue("roleId"), r.PathValue("permissionId"))
+	writeJSON(w, http.StatusOK, map[string]any{"status": "revoked"})
+}
+
+// ---------------------------------------------------------------------------
 // Overview / Host / Logs / Traffic
 // ---------------------------------------------------------------------------
 func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {

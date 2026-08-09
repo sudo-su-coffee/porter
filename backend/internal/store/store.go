@@ -1819,6 +1819,127 @@ func (s *Store) DeleteProjectMember(projectID, userID string) bool {
 	return res.RowsAffected() > 0
 }
 
+// --- RBAC CRUD (roles / permissions / role_permissions) ---
+
+// ListRoles returns every role with its description.
+func (s *Store) ListRoles() []*types.Role {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, name, description FROM roles ORDER BY id`)
+	if err != nil {
+		log.Printf("store: list roles: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Role, 0)
+	for rows.Next() {
+		var r types.Role
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description); err != nil {
+			continue
+		}
+		r.Permissions = s.RolePermissions(r.ID)
+		out = append(out, &r)
+	}
+	return out
+}
+
+// GetRole returns a role (with its permission codes) by id.
+func (s *Store) GetRole(id string) (*types.Role, bool) {
+	var r types.Role
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, name, description FROM roles WHERE id = $1`, id).
+		Scan(&r.ID, &r.Name, &r.Description)
+	if err != nil {
+		return nil, false
+	}
+	r.Permissions = s.RolePermissions(r.ID)
+	return &r, true
+}
+
+// PutRole inserts or updates a role row.
+func (s *Store) PutRole(r *types.Role) {
+	if r.ID == "" || r.Name == "" {
+		return
+	}
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO roles (id, name, description) VALUES ($1,$2,$3)
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description`,
+		r.ID, r.Name, r.Description)
+	if err != nil {
+		log.Printf("store: put role %s: %v", r.ID, err)
+	}
+}
+
+// DeleteRole removes a role and its permission mappings.
+func (s *Store) DeleteRole(id string) bool {
+	res, err := s.pool.Exec(context.Background(), `DELETE FROM roles WHERE id = $1`, id)
+	if err != nil {
+		log.Printf("store: delete role %s: %v", id, err)
+		return false
+	}
+	return res.RowsAffected() > 0
+}
+
+// ListAllPermissions returns every permission row.
+func (s *Store) ListAllPermissions() []*types.Permission {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, name, description FROM permissions ORDER BY id`)
+	if err != nil {
+		log.Printf("store: list permissions: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Permission, 0)
+	for rows.Next() {
+		var p types.Permission
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description); err != nil {
+			continue
+		}
+		out = append(out, &p)
+	}
+	return out
+}
+
+// AddRolePermission grants one permission to a role (idempotent).
+func (s *Store) AddRolePermission(roleID, permission string) {
+	_, err := s.pool.Exec(context.Background(),
+		`INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+		roleID, permission)
+	if err != nil {
+		log.Printf("store: add permission %s to %s: %v", permission, roleID, err)
+	}
+}
+
+// RemoveRolePermission revokes one permission from a role (idempotent).
+func (s *Store) RemoveRolePermission(roleID, permission string) {
+	_, err := s.pool.Exec(context.Background(),
+		`DELETE FROM role_permissions WHERE role_id = $1 AND permission_id = $2`,
+		roleID, permission)
+	if err != nil {
+		log.Printf("store: remove permission %s from %s: %v", permission, roleID, err)
+	}
+}
+
+// SetRolePermissions replaces a role's permission set in one transaction.
+func (s *Store) SetRolePermissions(roleID string, perms []string) error {
+	tx, err := s.pool.Begin(context.Background())
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(context.Background(),
+		`DELETE FROM role_permissions WHERE role_id = $1`, roleID); err != nil {
+		return err
+	}
+	for _, p := range perms {
+		if _, err := tx.Exec(context.Background(),
+			`INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+			roleID, p); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(context.Background())
+}
+
 // RolePermissions returns the permission codes granted to a role via the
 // role_permissions table. Empty for unknown roles.
 func (s *Store) RolePermissions(roleID string) []string {

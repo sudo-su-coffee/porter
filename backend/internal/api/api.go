@@ -575,6 +575,18 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /users", a.auth(a.handleListUsers))
 	mux.HandleFunc("POST /users", a.auth(a.handleCreateUser))
 	mux.HandleFunc("DELETE /users/{username}", a.auth(a.handleDeleteUser)) // now uses username
+
+	// ========== RBAC (roles & permissions CRUD) ==========
+	mux.HandleFunc("GET /roles", a.auth(a.handleListRoles))
+	mux.HandleFunc("POST /roles", a.auth(a.handleCreateRole))
+	mux.HandleFunc("GET /roles/{roleId}", a.auth(a.handleGetRole))
+	mux.HandleFunc("PATCH /roles/{roleId}", a.auth(a.handlePatchRole))
+	mux.HandleFunc("DELETE /roles/{roleId}", a.auth(a.handleDeleteRole))
+	mux.HandleFunc("GET /permissions", a.auth(a.handleListPermissions))
+	mux.HandleFunc("GET /roles/{roleId}/permissions", a.auth(a.handleGetRolePermissions))
+	mux.HandleFunc("PUT /roles/{roleId}/permissions", a.auth(a.handleSetRolePermissions))
+	mux.HandleFunc("POST /roles/{roleId}/permissions/{permissionId}", a.auth(a.handleAddRolePermission))
+	mux.HandleFunc("DELETE /roles/{roleId}/permissions/{permissionId}", a.auth(a.handleRemoveRolePermission))
 	mux.HandleFunc("POST /projects/{projectId}/export", a.auth(a.handleExportProject))
 	mux.HandleFunc("POST /projects/{projectId}/import", a.auth(a.handleImportProject))
 	mux.HandleFunc("PUT /projects/{projectId}/ssh", a.auth(a.handleSSHToggle))
@@ -900,6 +912,8 @@ var routePerms = map[string]string{
 	"GET /traffic/search":                "traffic.read",
 	"GET /images":                        "project.read",
 	"GET /images/search":                 "project.read",
+	"GET /images/stats":                  "project.read",
+	"POST /images/prune":                 "cache.purge",
 	"GET /images/{reference}":            "project.read",
 	"DELETE /images/{reference}":         "project.delete",
 	"GET /vms":                           "replica.list",
@@ -934,6 +948,9 @@ var routePerms = map[string]string{
 	"GET /groups/{groupId}":       "project.read",
 	"PATCH /groups/{groupId}":     "group.update",
 	"DELETE /groups/{groupId}":    "group.delete",
+	"GET /groups/{groupId}/projects": "project.read",
+	"POST /groups/{groupId}/projects/{projectId}": "project.write",
+	"DELETE /groups/{groupId}/projects/{projectId}": "project.write",
 	// auth / users / servers (global)
 	"GET /users":                "user.list",
 	"POST /users":               "user.create",
@@ -944,6 +961,17 @@ var routePerms = map[string]string{
 	"GET /users/me/api-keys":    "apikey.create",
 	"POST /users/me/api-keys":   "apikey.create",
 	"DELETE /users/me/api-keys/{keyId}": "apikey.delete",
+	// RBAC management
+	"GET /roles":                            "org.audit",
+	"POST /roles":                           "org.member.role",
+	"GET /roles/{roleId}":                   "org.audit",
+	"PATCH /roles/{roleId}":                 "org.member.role",
+	"DELETE /roles/{roleId}":                "org.member.role",
+	"GET /permissions":                      "org.audit",
+	"GET /roles/{roleId}/permissions":       "org.audit",
+	"PUT /roles/{roleId}/permissions":       "org.member.role",
+	"POST /roles/{roleId}/permissions/{permissionId}": "org.member.role",
+	"DELETE /roles/{roleId}/permissions/{permissionId}": "org.member.role",
 }
 
 // bearerToken, constantTimeEqual unchanged...

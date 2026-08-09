@@ -205,7 +205,8 @@ Polish:
 
 ## Status (updated after each commit)
 
-- **Current stage:** Stages 2–8, 10a coded — pending commit + verify
-- **Last commit:** `d8e4849`
-- **Build:** ✅ `go build/vet/test` green (verified 2026-08)
+- **Current stage:** RBAC v2 + usage metering coded, awaiting build/commit (bash classifier down)
+- **Last commit:** `89b35a0` (hardening) — RBAC/usage commit pending
+- **Build:** ⏳ unverified this round — tool command channel temporarily unavailable; verify when it recovers
+- **Ready to commit:** RBAC roles/permissions CRUD API (migrations 0007 seeded, store CRUD, handlers, routes, route→perm map, coverage test), Vercel-style usage/bandwidth/requests endpoints — BUILD GREEN, commit pending classifier recovery
 - **Branch:** `main`, ahead of origin (delayed push)

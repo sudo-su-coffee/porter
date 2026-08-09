@@ -432,3 +432,19 @@ type ProjectMember struct {
 	Invited   bool      `json:"invited"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Role is one RBAC role with the permission codes it grants (from
+// role_permissions). Roles are defined in the DB so they are editable.
+type Role struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+}
+
+// Permission is a single capability code (e.g. "ssh.connect").
+type Permission struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}

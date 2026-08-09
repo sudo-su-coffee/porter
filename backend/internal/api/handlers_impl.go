@@ -989,6 +989,134 @@ func (a *API) handleDeploymentLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"logs": a.store.TailBuildLogs(a.projectID(r), 200)})
 }
 
+// handleGetDeploymentChecks returns the deployment's required checks.
+func (a *API) handleGetDeploymentChecks(w http.ResponseWriter, r *http.Request) {
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	d, ok := a.store.GetDeployment(proj.ID, r.PathValue("deployId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deployment":  d.ID,
+		"checks":      d.Checks,
+		"all_passed":  store.AllChecksPassed(d),
+		"rollout_pct": d.RolloutPercent,
+	})
+}
+
+// handleUpsertDeploymentChecks sets the list of required checks for a deployment
+// (the source of truth gating promotion).
+func (a *API) handleUpsertDeploymentChecks(w http.ResponseWriter, r *http.Request) {
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	d, ok := a.store.GetDeployment(proj.ID, r.PathValue("deployId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+	var req struct {
+		Checks []types.DeploymentCheck `json:"checks"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	d.Checks = req.Checks
+	if err := a.store.CreateDeployment(d); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deployment":  d.ID,
+		"checks":      d.Checks,
+		"all_passed":  store.AllChecksPassed(d),
+		"rollout_pct": d.RolloutPercent,
+	})
+}
+
+// handleSetDeploymentCheck marks one check passed/failed by name.
+func (a *API) handleSetDeploymentCheck(w http.ResponseWriter, r *http.Request) {
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	d, ok := a.store.GetDeployment(proj.ID, r.PathValue("deployId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+	var req struct {
+		Status string `json:"status"` // passed | failed | running
+		Detail string `json:"detail"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	name := r.PathValue("checkName")
+	updated := false
+	for i := range d.Checks {
+		if d.Checks[i].Name == name {
+			d.Checks[i].Status = req.Status
+			d.Checks[i].Detail = req.Detail
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		writeError(w, http.StatusNotFound, "check not found: "+name)
+		return
+	}
+	if err := a.store.CreateDeployment(d); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deployment": d.ID, "check": name, "status": req.Status,
+		"all_passed": store.AllChecksPassed(d),
+	})
+}
+
+// handleSetDeploymentRollout adjusts the rolling-release weight (0-100).
+func (a *API) handleSetDeploymentRollout(w http.ResponseWriter, r *http.Request) {
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	d, ok := a.store.GetDeployment(proj.ID, r.PathValue("deployId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+	var req struct {
+		Percent int `json:"percent"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.Percent < 0 || req.Percent > 100 {
+		writeError(w, http.StatusBadRequest, "percent must be 0-100")
+		return
+	}
+	d.RolloutPercent = req.Percent
+	if err := a.store.CreateDeployment(d); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deployment": d.ID, "rollout_pct": d.RolloutPercent})
+}
+
 // handlePromoteDeployment flips 100% of a project's traffic to the given
 // deployment: the project's active image becomes the deployment's image and
 // the replica pool is recreated with it (blue/green hand-off). Unless the
@@ -1009,6 +1137,11 @@ func (a *API) handlePromoteDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	if targetDep == nil || targetDep.ImageDigest == "" {
 		writeError(w, http.StatusNotFound, "deployment not found or has no image")
+		return
+	}
+	// Gate promotion on required deployment checks (zero-downtime safety).
+	if !store.AllChecksPassed(targetDep) {
+		writeError(w, http.StatusConflict, "deployment has pending/failed checks; complete checks before promoting")
 		return
 	}
 	keepOld := r.URL.Query().Get("keep_old") == "1"

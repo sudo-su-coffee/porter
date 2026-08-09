@@ -49,7 +49,24 @@ func TestEveryRegisteredRouteIsMapped(t *testing.T) {
 		t.Fatalf("routes registered but missing from routePerms (%d):\n  %s",
 			len(missing), strings.Join(missing, "\n  "))
 	}
+
+	// Reverse check: every routePerms key must be an actually-registered route —
+	// otherwise the permission entry is dead. Handler existence is enforced by
+	// the compiler (a mux line referencing a missing handler won't build).
+	var dead []string
+	for pat := range mnorm {
+		if !registered[pat] {
+			dead = append(dead, pat)
+		}
+	}
+	sort.Strings(dead)
+	if len(dead) > 0 {
+		t.Fatalf("routePerms entries with no matching registered route (%d):\n  %s",
+			len(dead), strings.Join(dead, "\n  "))
+	}
 }
+
+// isUnGuarded lists patterns that intentionally need no permission guard.
 
 // isUnGuarded lists patterns that intentionally need no permission guard.
 func isUnGuarded(p string) bool {

@@ -389,7 +389,15 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /projects/{projectId}/deployments", a.auth(a.handleCreateDeployment))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/upload", a.auth(a.handleDeploymentUpload))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}", a.auth(a.handleGetDeployment))
+	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/checks", a.auth(a.handleGetDeploymentChecks))
+	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/checks", a.auth(a.handleUpsertDeploymentChecks))
+	mux.HandleFunc("PATCH /projects/{projectId}/deployments/{deployId}/checks/{checkName}", a.auth(a.handleSetDeploymentCheck))
+	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/rollout", a.auth(a.handleSetDeploymentRollout))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/logs", a.auth(a.handleDeploymentLogs))
+	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/checks", a.auth(a.handleGetDeploymentChecks))
+	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/checks", a.auth(a.handleUpsertDeploymentChecks))
+	mux.HandleFunc("PATCH /projects/{projectId}/deployments/{deployId}/checks/{checkName}", a.auth(a.handleSetDeploymentCheck))
+	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/rollout", a.auth(a.handleSetDeploymentRollout))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/{deployId}/promote", a.auth(a.handlePromoteDeployment))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/{deployId}/rollback", a.auth(a.handleRollbackDeployment))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/source", a.auth(a.handleDeploymentSource))
@@ -782,6 +790,10 @@ var routePerms = map[string]string{
 	"POST /projects/{projectId}/deployments":           "deployment.create",
 	"GET /projects/{projectId}/deployments/{deployId}": "deployment.list",
 	"GET /projects/{projectId}/deployments/{deployId}/logs": "log.read",
+	"GET /projects/{projectId}/deployments/{deployId}/checks":  "deployment.list",
+	"PUT /projects/{projectId}/deployments/{deployId}/checks":  "deployment.create",
+	"PATCH /projects/{projectId}/deployments/{deployId}/checks/{checkName}": "deployment.create",
+	"PUT /projects/{projectId}/deployments/{deployId}/rollout":  "deployment.promote",
 	"POST /projects/{projectId}/deployments/{deployId}/promote":  "deployment.promote",
 	"POST /projects/{projectId}/deployments/{deployId}/rollback": "deployment.rollback",
 	"GET /projects/{projectId}/settings/general":       "project.read",

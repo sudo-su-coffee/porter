@@ -20,6 +20,7 @@ import (
 	"porter" // embedded web/dist assets (module root)
 	fcnet "porter/internal/net"
 	"porter/internal/api"
+	"porter/internal/cache"
 	"porter/internal/config"
 	"porter/internal/dns"
 	"porter/internal/event"
@@ -109,6 +110,20 @@ func runServer(args []string) int {
 
 	st := store.NewStore(cfg.DatabaseURL)
 	defer st.Close()
+
+	// Optional Redis read-through cache for hot read paths (config [cache]).
+	if cfg.CacheEnabled && cfg.CacheURL != "" {
+		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rc, err := cache.Open(cctx, cfg.CacheURL)
+		ccancel()
+		if err != nil {
+			log.Printf("cache: Redis disabled (%v)", err)
+		} else {
+			st.SetCache(rc)
+			defer rc.Close()
+			log.Printf("cache: Redis read-through cache enabled (%s)", cfg.CacheURL)
+		}
+	}
 	hub := event.NewHub()
 
 	vmm := newVMEngine(rt.FCConfig{

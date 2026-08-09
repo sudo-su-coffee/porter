@@ -228,15 +228,24 @@ type GoldenImage struct {
 
 // Deployment is one revision of a project (v0.3 version history / rollback).
 type Deployment struct {
-	ID          string    `json:"id"`
-	ProjectID   string    `json:"project_id"`
-	Revision    int       `json:"revision"`
-	GitURL      string    `json:"git_url,omitempty"`
-	GitCommit   string    `json:"git_commit,omitempty"`
-	BuildStatus string    `json:"build_status"`
-	ImageDigest string    `json:"image_digest,omitempty"`
-	RollbackTo  string    `json:"rollback_to,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             string            `json:"id"`
+	ProjectID      string            `json:"project_id"`
+	Revision       int               `json:"revision"`
+	GitURL         string            `json:"git_url,omitempty"`
+	GitCommit      string            `json:"git_commit,omitempty"`
+	BuildStatus    string            `json:"build_status"`
+	ImageDigest    string            `json:"image_digest,omitempty"`
+	RollbackTo     string            `json:"rollback_to,omitempty"`
+	Checks         []DeploymentCheck `json:"checks,omitempty"`     // required checks gate promotion
+	RolloutPercent int               `json:"rollout_percent,omitempty"` // rolling weight (0-100)
+	CreatedAt      time.Time         `json:"created_at"`
+}
+
+// DeploymentCheck is one required check a deployment must pass before promote.
+type DeploymentCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // pending | running | passed | failed
+	Detail string `json:"detail,omitempty"`
 }
 
 // Secret is an encrypted per-project secret (v0.2). Value is stored as an

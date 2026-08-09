@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"porter/internal/cache"
 	"porter/internal/types"
 	"porter/migrations"
 )
@@ -32,6 +33,8 @@ import (
 // not persisted.
 type Store struct {
 	pool *pgxpool.Pool
+
+	cache cache.Cache // optional read-through cache; nil = Noop (off)
 
 	trafficMu sync.RWMutex
 	traffic   map[string][]*types.TrafficEntry // replica_id -> ring (in-memory)
@@ -83,6 +86,39 @@ func (s *Store) Close() error {
 // NewID returns a random UUID string.
 func NewID() string {
 	return uuid.NewString()
+}
+
+// SetCache attaches an optional read-through cache (nil disables → Noop).
+func (s *Store) SetCache(c cache.Cache) {
+	if c == nil {
+		c = cache.Noop{}
+	}
+	s.cache = c
+}
+
+// cachedGet reads a key through the cache, falling back to load() on a miss.
+// The result is cached as the JSON of what load returns for ttl.
+func (s *Store) cachedGet(ctx context.Context, key string, ttl time.Duration, load func() ([]byte, error)) ([]byte, error) {
+	if s.cache != nil {
+		if b, ok := s.cache.Get(ctx, key); ok {
+			return b, nil
+		}
+	}
+	b, err := load()
+	if err != nil {
+		return nil, err
+	}
+	if s.cache != nil && ttl > 0 {
+		_ = s.cache.Set(ctx, key, b, ttl)
+	}
+	return b, nil
+}
+
+// cacheDel removes one or more keys from the cache (no-op when off).
+func (s *Store) cacheDel(ctx context.Context, keys ...string) {
+	if s.cache != nil {
+		_ = s.cache.Del(ctx, keys...)
+	}
 }
 
 // Migrate runs every NNNN_*.up.sql in order, tracking applied versions.
@@ -283,6 +319,7 @@ func (s *Store) DeleteReplicasByProject(projectID string) {
 func (s *Store) PutProject(p *types.Project) {
 	ctx := context.Background()
 	data := mustJSON(p)
+	s.cacheDel(ctx, "project:"+p.ID)
 	kind := "single_image"
 	if p.Source == "compose" {
 		kind = "compose"
@@ -308,9 +345,15 @@ func (s *Store) PutProject(p *types.Project) {
 }
 
 func (s *Store) GetProject(id string) (*types.Project, bool) {
-	var data []byte
-	if err := s.pool.QueryRow(context.Background(),
-		`SELECT data FROM projects WHERE id = $1`, id).Scan(&data); err != nil {
+	data, err := s.cachedGet(context.Background(), "project:"+id, 15*time.Second, func() ([]byte, error) {
+		var raw []byte
+		if qerr := s.pool.QueryRow(context.Background(),
+			`SELECT data FROM projects WHERE id = $1`, id).Scan(&raw); qerr != nil {
+			return nil, qerr
+		}
+		return raw, nil
+	})
+	if err != nil {
 		return nil, false
 	}
 	var p types.Project
@@ -650,23 +693,34 @@ func (s *Store) TailBuildLogs(projectID string, n int) []string {
 // --- Deployments (version history / rollback) ---
 
 func (s *Store) CreateDeployment(d *types.Deployment) error {
+	if d.RolloutPercent == 0 {
+		d.RolloutPercent = 100
+	}
+	checks, _ := json.Marshal(d.Checks)
+	if checks == nil {
+		checks = []byte("[]")
+	}
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO deployments (id, project_id, build_status, image_digest, rollback_to, git_url, git_commit, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+		INSERT INTO deployments (id, project_id, build_status, image_digest, rollback_to, git_url, git_commit, checks, rollout_percent, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
 		ON CONFLICT (id) DO UPDATE SET
-			build_status = EXCLUDED.build_status,
-			image_digest = EXCLUDED.image_digest,
-			rollback_to  = EXCLUDED.rollback_to,
-			git_url      = EXCLUDED.git_url,
-			git_commit   = EXCLUDED.git_commit`,
+			build_status    = EXCLUDED.build_status,
+			image_digest    = EXCLUDED.image_digest,
+			rollback_to     = EXCLUDED.rollback_to,
+			git_url         = EXCLUDED.git_url,
+			git_commit      = EXCLUDED.git_commit,
+			checks          = EXCLUDED.checks,
+			rollout_percent = EXCLUDED.rollout_percent`,
 		d.ID, nullableStr(d.ProjectID), d.BuildStatus, nullableStr(d.ImageDigest),
-		nullableStr(d.RollbackTo), nullableStr(d.GitURL), nullableStr(d.GitCommit))
+		nullableStr(d.RollbackTo), nullableStr(d.GitURL), nullableStr(d.GitCommit),
+		string(checks), d.RolloutPercent)
 	return err
 }
 
 func (s *Store) ListDeployments(projectID string) []*types.Deployment {
 	rows, err := s.pool.Query(context.Background(), `
-		SELECT id, project_id, build_status, image_digest, COALESCE(rollback_to,''), git_url, git_commit, created_at FROM deployments
+		SELECT id, project_id, build_status, image_digest, COALESCE(rollback_to,''), git_url, git_commit,
+		       COALESCE(checks,'[]'::jsonb), COALESCE(rollout_percent,100), created_at FROM deployments
 		WHERE project_id = $1 ORDER BY revision DESC`, projectID)
 	if err != nil {
 		log.Printf("store: list deployments for %s: %v", projectID, err)
@@ -676,13 +730,39 @@ func (s *Store) ListDeployments(projectID string) []*types.Deployment {
 	out := make([]*types.Deployment, 0)
 	for rows.Next() {
 		var d types.Deployment
+		var checks []byte
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.BuildStatus, &d.ImageDigest,
-			&d.RollbackTo, &d.GitURL, &d.GitCommit, &d.CreatedAt); err != nil {
+			&d.RollbackTo, &d.GitURL, &d.GitCommit, &checks, &d.RolloutPercent, &d.CreatedAt); err != nil {
 			continue
 		}
+		_ = json.Unmarshal(checks, &d.Checks)
 		out = append(out, &d)
 	}
 	return out
+}
+
+// GetDeployment returns one deployment by id within a project.
+func (s *Store) GetDeployment(projectID, id string) (*types.Deployment, bool) {
+	for _, d := range s.ListDeployments(projectID) {
+		if d.ID == id {
+			return d, true
+		}
+	}
+	return nil, false
+}
+
+// AllChecksPassed is true when a deployment has checks and every one has
+// status "passed"; a deployment with no checks trivially passes.
+func AllChecksPassed(d *types.Deployment) bool {
+	if len(d.Checks) == 0 {
+		return true
+	}
+	for _, c := range d.Checks {
+		if c.Status != "passed" {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Secrets (per project, stored encrypted) ---

@@ -18,6 +18,11 @@
 listen_addr = ":8080"
 #   Override: PORTER_LISTEN_ADDR
 
+# volumes_dir — where real persistent volume data lives (one dir per volume
+# with a sparse data.img). Defaults to ./volumes.
+# volumes_dir = "volumes"
+#   Override: PORTER_VOLUMES_DIR
+
 # base_domain — DNS suffix Porter appends when auto-creating per-service
 # domains, e.g. `<name>.porter.test`.
 base_domain = "porter.test"
@@ -142,3 +147,24 @@ enabled = false
 # listen_addr — SSH gateway listener.
 listen_addr = ":2222"
 #   Override: PORTER_SSH_LISTEN_ADDR
+
+# ---------------------------------------------------------------------------
+[autoscale]
+# enabled — horizontal autoscaler: polls project load and adjusts the replica
+# pool per each project's AutoscalePolicy (min/max replicas, CPU target).
+enabled = false
+#   Override: PORTER_AUTOSCALE_ENABLED
+
+# ---------------------------------------------------------------------------
+[cache]
+# enabled — optional Redis read-through cache for hot read paths.
+enabled = false
+#   Override: PORTER_CACHE_ENABLED
+
+# url — Redis connection string (e.g. redis://localhost:6379/0).
+url = "redis://localhost:6379/0"
+#   Override: PORTER_CACHE_URL
+
+# ttl_seconds — how long cached reads stay fresh before falling through to PG.
+ttl_seconds = 15
+#   Override: PORTER_CACHE_TTL_SECONDS

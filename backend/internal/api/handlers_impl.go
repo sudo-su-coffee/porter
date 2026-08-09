@@ -1783,10 +1783,70 @@ func (a *API) runGitBuildCtx(b *types.Build) {
 			return
 		}
 	}
-	logf("repository cloned; Dockerfile present — image build goes through the BuildKit pipeline (v0.2.0)")
-	b.BuildStatus = "ready"
-	b.Image = "git://" + b.GitURL + "#" + orDefault(b.Branch, "main")
-	a.store.PutBuild(b)
+	logf("repository cloned; Dockerfile present — building image")
+	// Real OCI image build: prefer the containerd-native path. Try docker
+	// first, then the standalone BuildKit CLI (buildctl). Each produces a
+	// docker-format tarball that is imported straight into containerd's
+	// content store under the "porter" namespace — no registry round-trip.
+	ref := "porter/" + b.ProjectID + ":" + shortBuildRef(b)
+	attempts := []struct {
+		name string
+		c    []string
+	}{
+		{
+			name: "docker build + import",
+			c:    []string{"sh", "-c", fmt.Sprintf("docker build -t %s %s && docker save %s | ctr --namespace porter images import -", ref, dir, ref)},
+		},
+		{
+			name: "buildctl + import",
+			c:    []string{"sh", "-c", fmt.Sprintf("buildctl build --frontend dockerfile.v0 --local context=%s --local dockerfile=%s --output type=docker,name=%s | ctr --namespace porter images import -", dir, dir, ref)},
+		},
+	}
+	built := false
+	for _, at := range attempts {
+		if _, err := exec.LookPath(strings.Fields(at.c[0])[0]); err != nil {
+			logf(at.name + " unavailable (%v) — trying next backend")
+			continue
+		}
+		if err := execCommand(at.c...); err != nil {
+			logf(fmt.Sprintf("%s failed: %v", at.name, err))
+			continue
+		}
+		logf(fmt.Sprintf("%s succeeded → image %s imported into containerd", at.name, ref))
+		b.Image = ref
+		b.BuildStatus = "ready"
+		a.store.PutBuild(b)
+		logf("build ready: " + ref)
+		a.hub.Broadcast("build.ready", map[string]any{"build": b.ID, "image": ref})
+		built = true
+		break
+	}
+	if !built {
+		b.BuildStatus = "building"
+		b.Log += "image build needs a docker daemon or buildkitd on the host; marking build-not-ready\n"
+		logf("image build backend unavailable — clone+dockerfile verified, image push deferred (needs docker or buildkitd)")
+		// Honest intermediate state: the repo is cloned and a Dockerfile is
+		// confirmed, but no image exists yet. Do not claim "ready".
+		b.Image = "git://" + b.GitURL + "#" + orDefault(b.Branch, "main")
+		a.store.PutBuild(b)
+	}
+}
+
+// shortBuildRef is a stable, short image tag from a build id.
+func shortBuildRef(b *types.Build) string {
+	id := b.ID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return id
+}
+
+// execCommand runs a shell command and streams its stdout/stderr.
+func execCommand(args ...string) error {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func (a *API) handleListBuilds(w http.ResponseWriter, r *http.Request) {

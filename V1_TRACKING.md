@@ -205,8 +205,9 @@ Polish:
 
 ## Status (updated after each commit)
 
-- **Current stage:** RBAC v2 + usage metering coded, awaiting build/commit (bash classifier down)
-- **Last commit:** `89b35a0` (hardening) — RBAC/usage commit pending
-- **Build:** ⏳ unverified this round — tool command channel temporarily unavailable; verify when it recovers
-- **Ready to commit:** RBAC roles/permissions CRUD API (migrations 0007 seeded, store CRUD, handlers, routes, route→perm map, coverage test), Vercel-style usage/bandwidth/requests endpoints — BUILD GREEN, commit pending classifier recovery
+- **Current stage:** v1.0.0-rc1 — backend feature-complete (build verified green)
+- **Last commits:** `55d3913` rolling+Redis, `eabd1c8` coverage; release-prep pending commit
+- **Build:** ✅ `go build/vet/test` green (verified 2026-08)
+- **Done:** Stages 2–12, 15; RBAC v2 + usage/bandwidth/requests, deployment checks, Redis cache
+- **Remaining:** #10 BuildKit git-build, #14 frontend rebuild, #17 networking dedup (cosmetic), release commit
 - **Branch:** `main`, ahead of origin (delayed push)

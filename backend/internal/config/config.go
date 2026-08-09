@@ -145,6 +145,9 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.GatewayIP = tomlGet(sections, "dns", "gateway_ip", cfg.GatewayIP)
 		cfg.VolumesDir = tomlGet(sections, "server", "volumes_dir", cfg.VolumesDir)
 		cfg.AutoscaleEnabled = tomlBool(sections, "autoscale", "enabled", cfg.AutoscaleEnabled)
+		cfg.CacheEnabled = tomlBool(sections, "cache", "enabled", cfg.CacheEnabled)
+		cfg.CacheURL = tomlGet(sections, "cache", "url", cfg.CacheURL)
+		cfg.CacheTTLSeconds = tomlInt(sections, "cache", "ttl_seconds", cfg.CacheTTLSeconds)
 	case os.IsNotExist(err):
 		// No porter.toml — fine, env vars / defaults carry the config.
 	default:
@@ -180,6 +183,9 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.GatewayIP = envOr("PORTER_GATEWAY_IP", cfg.GatewayIP)
 	cfg.VolumesDir = envOr("PORTER_VOLUMES_DIR", cfg.VolumesDir)
 	cfg.AutoscaleEnabled = envBool("PORTER_AUTOSCALE_ENABLED", cfg.AutoscaleEnabled)
+	cfg.CacheEnabled = envBool("PORTER_CACHE_ENABLED", cfg.CacheEnabled)
+	cfg.CacheURL = envOr("PORTER_CACHE_URL", cfg.CacheURL)
+	cfg.CacheTTLSeconds = envInt("PORTER_CACHE_TTL_SECONDS", cfg.CacheTTLSeconds)
 
 	if cfg.APIToken == "" {
 		return nil, fmt.Errorf("no API token configured — set [server] api_token in %s or PORTER_API_TOKEN", path)

@@ -9,6 +9,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -25,13 +27,17 @@ import (
 	"porter/migrations"
 )
 
-// Store is the single real state store: a pgx pool plus two in-memory ring
-// buffers (traffic + per-VM logs) that are explicitly not persisted.
+// Store is the single real state store: a pgx pool plus three in-memory ring
+// buffers (traffic + per-VM logs + web-vitals beacons) that are explicitly
+// not persisted.
 type Store struct {
 	pool *pgxpool.Pool
 
 	trafficMu sync.RWMutex
 	traffic   map[string][]*types.TrafficEntry // replica_id -> ring (in-memory)
+
+	vitalsMu sync.RWMutex
+	vitals   map[string][]*types.WebVital // project_id -> ring (in-memory)
 
 	logMu      sync.RWMutex
 	logs       map[string][]string
@@ -61,6 +67,7 @@ func NewStore(dsn string) *Store {
 	return &Store{
 		pool:    pool,
 		traffic: map[string][]*types.TrafficEntry{},
+		vitals:  map[string][]*types.WebVital{},
 		logs:    map[string][]string{},
 	}
 }
@@ -1057,6 +1064,36 @@ func (s *Store) ClearTrafficForPath(projectID, path string) (removed int) {
 	return removed
 }
 
+// --- Web-vitals ring buffer (in-memory only) ---
+
+// AddVital records a browser-reported Core Web Vital beacon.
+func (s *Store) AddVital(v *types.WebVital) {
+	if v == nil || v.ProjectID == "" {
+		return
+	}
+	s.vitalsMu.Lock()
+	defer s.vitalsMu.Unlock()
+	buf := append(s.vitals[v.ProjectID], v)
+	if len(buf) > 500 {
+		buf = buf[len(buf)-500:]
+	}
+	s.vitals[v.ProjectID] = buf
+}
+
+// ListVitals returns the last n web-vitals beacons for a project, newest-last.
+func (s *Store) ListVitals(projectID string, limit int) []*types.WebVital {
+	s.vitalsMu.RLock()
+	defer s.vitalsMu.RUnlock()
+	buf := s.vitals[projectID]
+	if limit <= 0 || limit > len(buf) {
+		limit = len(buf)
+	}
+	start := len(buf) - limit
+	out := make([]*types.WebVital, limit)
+	copy(out, buf[start:])
+	return out
+}
+
 // --- Log ring buffer (in-memory only) ---
 
 func (s *Store) AppendLog(vmID, line string) {
@@ -1216,6 +1253,42 @@ func (s *Store) DeleteAPIKey(id string) bool {
 		return false
 	}
 	return res.RowsAffected() > 0
+}
+
+// GetAPIKeyByHash finds an API key row by its token hash (the lookup the auth
+// middleware uses to resolve a bearer token back to a user).
+func (s *Store) GetAPIKeyByHash(hash string) (*types.APIKey, bool) {
+	var k types.APIKey
+	var lu *time.Time
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, COALESCE(user_id,''), name, token_hash, created_at, last_used_at FROM api_keys WHERE token_hash = $1`, hash).
+		Scan(&k.ID, &k.UserID, &k.Name, &k.TokenHash, &k.CreatedAt, &lu)
+	if err != nil {
+		return nil, false
+	}
+	k.LastUsed = lu
+	return &k, true
+}
+
+// GetUserByToken resolves a bearer token (via its stored hash) to the user it
+// was issued for. Returns ok=false when the token isn't a per-user key.
+func (s *Store) GetUserByToken(raw string) (*types.User, bool) {
+	k, ok := s.GetAPIKeyByHash(hashOf(raw))
+	if !ok || k.UserID == "" || k.UserID == "*" {
+		return nil, false
+	}
+	u, ok := s.GetUserByUsername(k.UserID)
+	if !ok {
+		return nil, false
+	}
+	return u, true
+}
+
+// hashOf is a small local sha256-hex helper (mirrors api.hashToken without
+// importing the api package).
+func hashOf(raw string) string {
+	h := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(h[:])
 }
 
 // ---- Volumes ----
@@ -1410,6 +1483,29 @@ func (s *Store) ListCrons(projectID string) []*types.Cron {
 		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
 	if err != nil {
 		log.Printf("store: list crons: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Cron, 0)
+	for rows.Next() {
+		var c types.Cron
+		var lr *time.Time
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Name, &c.Schedule, &c.JobImage, &c.Active, &lr); err != nil {
+			continue
+		}
+		c.LastRun = lr
+		out = append(out, &c)
+	}
+	return out
+}
+
+// ListAllCrons returns every cron in the system regardless of project — used
+// by the scheduler to fire jobs across all projects.
+func (s *Store) ListAllCrons() []*types.Cron {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, COALESCE(project_id,''), name, schedule, job_image, active, last_run_at FROM crons ORDER BY created_at`)
+	if err != nil {
+		log.Printf("store: list all crons: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -1721,6 +1817,38 @@ func (s *Store) DeleteProjectMember(projectID, userID string) bool {
 		return false
 	}
 	return res.RowsAffected() > 0
+}
+
+// ProjectRoleForUser resolves a user's role on a project through the PostgreSQL
+// RBAC tables — project_members first, then org_members (via the project's org).
+// Returns "" when the user has no explicit membership row (callers then fall
+// back to the user's global role).
+func (s *Store) ProjectRoleForUser(projectID, username string) string {
+	if projectID == "" || username == "" {
+		return ""
+	}
+	var role string
+	// 1. Direct project membership.
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2`,
+		projectID, username).Scan(&role)
+	if err == nil && role != "" {
+		return role
+	}
+	// 2. Org membership for the project's org (owner-level covers every project).
+	var orgID string
+	_ = s.pool.QueryRow(context.Background(),
+		`SELECT COALESCE(org_id,'') FROM projects WHERE id = $1`, projectID).Scan(&orgID)
+	if orgID == "" {
+		return ""
+	}
+	err = s.pool.QueryRow(context.Background(),
+		`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`,
+		orgID, username).Scan(&role)
+	if err == nil && role != "" {
+		return role
+	}
+	return ""
 }
 
 // ---- Builds (git-based build → OCI → microVM) ----

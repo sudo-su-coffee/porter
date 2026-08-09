@@ -40,3 +40,6 @@ porter.zip
 # OS/editor cruft
 .DS_Store
 *.swp
+
+# reference frontend (not part of porter build)
+frontendsample/

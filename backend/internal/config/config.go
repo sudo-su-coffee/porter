@@ -66,6 +66,15 @@ type Config struct {
 	CacheURL        string // e.g. redis://localhost:6379/0
 	CacheTTLSeconds int    // seconds cached reads stay fresh (<=0 keeps default)
 
+	// TLS/ACME: automatic Let's Encrypt certificates.
+	TLSEnabled  bool   // enable HTTPS via ACME
+	ACMEEmail   string // email for Let's Encrypt account
+	GatewayIP   string // IP for DNS A records (e.g., public IP of this host)
+
+	// VolumesDir is where real persistent volume data lives (one dir per volume
+	// with a sparse data.img of the requested size). Defaults to ./volumes.
+	VolumesDir string
+
 	AdminUsername string
 	AdminPassword string
 }
@@ -90,6 +99,7 @@ func LoadConfig(path string) (*Config, error) {
 		SSHListenAddr:     ":2222",
 		CacheURL:          "redis://localhost:6379/0",
 		CacheTTLSeconds:   15,
+		VolumesDir:        "volumes",
 		AdminUsername:     "admin",
 	}
 
@@ -124,6 +134,10 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.SSHListenAddr = tomlGet(sections, "ssh", "listen_addr", cfg.SSHListenAddr)
 		cfg.AdminUsername = tomlGet(sections, "admin", "username", cfg.AdminUsername)
 		cfg.AdminPassword = tomlGet(sections, "admin", "password", cfg.AdminPassword)
+		cfg.TLSEnabled = tomlBool(sections, "tls", "enabled", cfg.TLSEnabled)
+		cfg.ACMEEmail = tomlGet(sections, "tls", "acme_email", cfg.ACMEEmail)
+		cfg.GatewayIP = tomlGet(sections, "dns", "gateway_ip", cfg.GatewayIP)
+		cfg.VolumesDir = tomlGet(sections, "server", "volumes_dir", cfg.VolumesDir)
 	case os.IsNotExist(err):
 		// No porter.toml — fine, env vars / defaults carry the config.
 	default:
@@ -154,6 +168,10 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.SSHListenAddr = envOr("PORTER_SSH_LISTEN_ADDR", cfg.SSHListenAddr)
 	cfg.AdminUsername = envOr("PORTER_ADMIN_USERNAME", cfg.AdminUsername)
 	cfg.AdminPassword = envOr("PORTER_ADMIN_PASSWORD", cfg.AdminPassword)
+	cfg.TLSEnabled = envBool("PORTER_TLS_ENABLED", cfg.TLSEnabled)
+	cfg.ACMEEmail = envOr("PORTER_ACME_EMAIL", cfg.ACMEEmail)
+	cfg.GatewayIP = envOr("PORTER_GATEWAY_IP", cfg.GatewayIP)
+	cfg.VolumesDir = envOr("PORTER_VOLUMES_DIR", cfg.VolumesDir)
 
 	if cfg.APIToken == "" {
 		return nil, fmt.Errorf("no API token configured — set [server] api_token in %s or PORTER_API_TOKEN", path)

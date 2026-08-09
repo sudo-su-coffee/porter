@@ -127,6 +127,18 @@ type TrafficEntry struct {
 	Status     int       `json:"status"`
 	DurationMS int       `json:"duration_ms"`
 	RemoteIP   string    `json:"remote_ip"`
+	BytesIn    int64     `json:"bytes_in,omitempty"`  // request body bytes
+	BytesOut   int64     `json:"bytes_out,omitempty"` // response body bytes
+}
+
+// WebVital is a real browser-reported Core Web Vital (LCP/CLS/INP/TTFB) beacon.
+type WebVital struct {
+	ProjectID string    `json:"project_id"`
+	Path      string    `json:"path"`
+	Metric    string    `json:"metric"` // lcp | cls | inp | ttfb
+	Value     float64   `json:"value"`
+	Rating    string    `json:"rating,omitempty"` // good | needs-improvement | poor
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // User is a non-bootstrap account stored in SQLite. The very first admin

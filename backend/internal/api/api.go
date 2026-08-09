@@ -18,10 +18,12 @@ import (
 	"time"
 
 	"porter/internal/compose"
+	"porter/internal/dns"
 	"porter/internal/event"
 	"porter/internal/netmgr"
 	"porter/internal/store"
 	"porter/internal/types"
+	"porter/internal/volumes"
 )
 
 // HeaderOrgID is the header used to pass the current org context.
@@ -67,6 +69,12 @@ type API struct {
 	// customImagesDir is where user-uploaded microVM .zip images unpack to.
 	// Set via SetCustomImagesDir (wired from config in main.go).
 	customImagesDir string
+
+	// domainMgr handles automatic preview/prod domain assignment.
+	domainMgr *dns.DomainManager
+
+	// volMgr manages real persistent volume directories on the host.
+	volMgr *volumes.Manager
 
 	// CSRF secret – must be set before routes are registered.
 	csrfToken string
@@ -117,6 +125,12 @@ func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManage
 	}
 	return api
 }
+
+// SetDomainManager configures automatic domain assignment for projects.
+func (a *API) SetDomainManager(dm *dns.DomainManager) { a.domainMgr = dm }
+
+// SetVolumesManager configures the real persistent-volume manager.
+func (a *API) SetVolumesManager(vm *volumes.Manager) { a.volMgr = vm }
 
 // SetCustomImagesDir configures the directory user-uploaded microVM images
 // are unpacked into (must be set before /images/custom is used).
@@ -281,27 +295,27 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects", a.auth(a.handleListProjects))
 	mux.HandleFunc("POST /projects", a.auth(a.handleCreateProject))
 	mux.HandleFunc("POST /projects/compose", a.auth(a.handleCreateComposeProject))
-	mux.HandleFunc("GET /projects/{projectId}", a.auth(a.handleGetProject))
-	mux.HandleFunc("PATCH /projects/{projectId}", a.auth(a.handlePatchProject))
-	mux.HandleFunc("DELETE /projects/{projectId}", a.auth(a.handleDeleteProject))
-	mux.HandleFunc("POST /projects/{projectId}/redeploy", a.auth(a.handleRedeployProject))
+	mux.HandleFunc("GET /projects/{projectId}", a.auth(a.requireProjectRole(a.handleGetProject, "viewer")))
+	mux.HandleFunc("PATCH /projects/{projectId}", a.auth(a.requireProjectRole(a.handlePatchProject, "member")))
+	mux.HandleFunc("DELETE /projects/{projectId}", a.auth(a.requireProjectRole(a.handleDeleteProject, "owner")))
+	mux.HandleFunc("POST /projects/{projectId}/redeploy", a.auth(a.requireProjectRole(a.handleRedeployProject, "member")))
 
 	// ========== Project: Scale, Health, Restart ==========
-	mux.HandleFunc("GET /projects/{projectId}/scale", a.auth(a.handleGetScale))
-	mux.HandleFunc("PATCH /projects/{projectId}/scale", a.auth(a.handleScale))
-	mux.HandleFunc("GET /projects/{projectId}/healthcheck", a.auth(a.handleGetHealthcheck))
-	mux.HandleFunc("PUT /projects/{projectId}/healthcheck", a.auth(a.handlePutHealthcheck))
-	mux.HandleFunc("POST /projects/{projectId}/restart", a.auth(a.handleRestartProject))
+	mux.HandleFunc("GET /projects/{projectId}/scale", a.auth(a.requireProjectRole(a.handleGetScale, "viewer")))
+	mux.HandleFunc("PATCH /projects/{projectId}/scale", a.auth(a.requireProjectRole(a.handleScale, "member")))
+	mux.HandleFunc("GET /projects/{projectId}/healthcheck", a.auth(a.requireProjectRole(a.handleGetHealthcheck, "viewer")))
+	mux.HandleFunc("PUT /projects/{projectId}/healthcheck", a.auth(a.requireProjectRole(a.handlePutHealthcheck, "member")))
+	mux.HandleFunc("POST /projects/{projectId}/restart", a.auth(a.requireProjectRole(a.handleRestartProject, "member")))
 
 	// ========== Project: Env & Secrets ==========
-	mux.HandleFunc("GET /projects/{projectId}/env", a.auth(a.handleListEnv))
-	mux.HandleFunc("POST /projects/{projectId}/env", a.auth(a.handleSetEnv))
-	mux.HandleFunc("POST /projects/{projectId}/env/bulk", a.auth(a.handleSetEnvBulk))
-	mux.HandleFunc("PATCH /projects/{projectId}/env/{envId}", a.auth(a.handlePatchEnv))
-	mux.HandleFunc("DELETE /projects/{projectId}/env/{envId}", a.auth(a.handleDeleteEnv))
-	mux.HandleFunc("GET /projects/{projectId}/secrets", a.auth(a.handleListSecrets))
-	mux.HandleFunc("POST /projects/{projectId}/secrets", a.auth(a.handleCreateSecret))
-	mux.HandleFunc("DELETE /projects/{projectId}/secrets/{secretId}", a.auth(a.handleDeleteSecret))
+	mux.HandleFunc("GET /projects/{projectId}/env", a.auth(a.requireProjectRole(a.handleListEnv, "viewer")))
+	mux.HandleFunc("POST /projects/{projectId}/env", a.auth(a.requireProjectRole(a.handleSetEnv, "member")))
+	mux.HandleFunc("POST /projects/{projectId}/env/bulk", a.auth(a.requireProjectRole(a.handleSetEnvBulk, "member")))
+	mux.HandleFunc("PATCH /projects/{projectId}/env/{envId}", a.auth(a.requireProjectRole(a.handlePatchEnv, "member")))
+	mux.HandleFunc("DELETE /projects/{projectId}/env/{envId}", a.auth(a.requireProjectRole(a.handleDeleteEnv, "member")))
+	mux.HandleFunc("GET /projects/{projectId}/secrets", a.auth(a.requireProjectRole(a.handleListSecrets, "viewer")))
+	mux.HandleFunc("POST /projects/{projectId}/secrets", a.auth(a.requireProjectRole(a.handleCreateSecret, "member")))
+	mux.HandleFunc("DELETE /projects/{projectId}/secrets/{secretId}", a.auth(a.requireProjectRole(a.handleDeleteSecret, "member")))
 
 	// ========== Project: Domains & DNS ==========
 	mux.HandleFunc("GET /projects/{projectId}/domains", a.auth(a.handleListDomains))
@@ -468,6 +482,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{projectId}/analytics/requests", a.auth(a.handleAnalyticsRequests))
 	mux.HandleFunc("GET /projects/{projectId}/analytics/invocations", a.auth(a.handleAnalyticsInvocations))
 	mux.HandleFunc("GET /projects/{projectId}/observability/web-vitals", a.auth(a.handleWebVitals))
+	mux.HandleFunc("POST /projects/{projectId}/observability/web-vitals/beacon", a.auth(a.handleWebVitalsBeacon))
 	mux.HandleFunc("GET /projects/{projectId}/observability/web-vitals/timeseries", a.auth(a.handleWebVitalsTimeseries))
 
 	// LCP/CLS/FID aliases
@@ -533,8 +548,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /servers", a.auth(a.handleListServers))
 	mux.HandleFunc("POST /servers", a.auth(a.handleRegisterServer))
 	mux.HandleFunc("DELETE /servers/{id}", a.auth(a.handleDeleteServer))
-	mux.HandleFunc("GET /users", a.auth(a.handleListUsers))
-	mux.HandleFunc("POST /users", a.auth(a.handleCreateUser))
+	mux.HandleFunc("GET /users", a.auth(a.requireRole(a.handleListUsers, "admin")))
+	mux.HandleFunc("POST /users", a.auth(a.requireRole(a.handleCreateUser, "admin")))
 	mux.HandleFunc("DELETE /users/{username}", a.auth(a.handleDeleteUser)) // now uses username
 	mux.HandleFunc("POST /projects/{projectId}/export", a.auth(a.handleExportProject))
 	mux.HandleFunc("POST /projects/{projectId}/import", a.auth(a.handleImportProject))
@@ -571,10 +586,49 @@ func (a *API) handleCSRFToken(w http.ResponseWriter, r *http.Request) {
 // ----------------------------------------------------------------------------
 // Auth middleware with CSRF check for state-changing methods
 // ----------------------------------------------------------------------------
+// rbacCtxKey is the context key carrying the authenticated principal.
+type rbacCtxKey struct{}
+
+// principal is the authenticated user attached to the request by auth().
+type principal struct {
+	username string
+	role     string // global role from the users table
+	isAdmin  bool   // bootstrap config admin always has full access
+}
+
+// currentPrincipal returns the principal attached to the request, or the
+// config admin when none is attached (defensive default).
+func currentPrincipal(r *http.Request) principal {
+	if p, ok := r.Context().Value(rbacCtxKey{}).(principal); ok {
+		return p
+	}
+	return principal{username: "admin", role: "admin", isAdmin: true}
+}
+
+// currentRole returns the effective global role of the authenticated user.
+func currentRole(r *http.Request) string { return currentPrincipal(r).role }
+
+// currentUser returns the authenticated username (empty for the bootstrap admin
+// which is not a users-table row).
+func currentUser(r *http.Request) string { return currentPrincipal(r).username }
+
 func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Check bearer token
-		if a.token == "" || !constantTimeEqual(a.token, bearerToken(r)) {
+		// 1. Authenticate the bearer token: config admin OR a per-user API key.
+		tok := bearerToken(r)
+		p := principal{}
+		if tok != "" && constantTimeEqual(a.token, tok) {
+			p = principal{role: "admin", isAdmin: true} // bootstrap config admin
+		} else if tok != "" {
+			if u, ok := a.store.GetUserByToken(tok); ok {
+				role := u.Role
+				if role == "" {
+					role = "member"
+				}
+				p = principal{username: u.Username, role: role}
+			}
+		}
+		if p.role == "" {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -591,8 +645,54 @@ func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		ctx := context.WithValue(r.Context(), rbacCtxKey{}, p)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// requireRole wraps an authenticated handler to allow only users whose GLOBAL
+// role is at or above min (admin > member > viewer). Bootstrap admin passes.
+func (a *API) requireRole(next http.HandlerFunc, min string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := currentPrincipal(r)
+		if !p.isAdmin && !roleAllows(p.role, min) {
+			writeError(w, http.StatusForbidden, "insufficient permissions (need "+min+")")
+			return
+		}
 		next(w, r)
 	}
+}
+
+// requireProjectRole is the common PostgreSQL RBAC path: it resolves the
+// authenticated user's role ON the specific project via the project_members
+// table (owner/member/viewer), falling back to org_members, then global role.
+// Bootstrap admin bypasses. min is "owner"/"member"/"viewer".
+func (a *API) requireProjectRole(next http.HandlerFunc, min string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := currentPrincipal(r)
+		if p.isAdmin {
+			next(w, r)
+			return
+		}
+		projID := a.projectID(r)
+		role := a.store.ProjectRoleForUser(projID, p.username)
+		if role == "" {
+			// Fall back to the user's global role for projects without rows.
+			role = p.role
+		}
+		if !roleAllows(role, min) {
+			writeError(w, http.StatusForbidden, "no "+min+" access to this project")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// roleAllows reports whether role can perform an action requiring min.
+// Admin > member > viewer. Unknown roles are treated as viewer.
+func roleAllows(role, min string) bool {
+	rank := map[string]int{"viewer": 1, "member": 2, "admin": 3}
+	return rank[role] >= rank[min]
 }
 
 // bearerToken, constantTimeEqual unchanged...

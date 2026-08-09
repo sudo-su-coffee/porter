@@ -62,6 +62,11 @@ The checked-in backend is one Go package `main` in `backend/`, one component per
 - `config.go` + `toml.go` — config from `porter.toml` (`[server]`, `[firecracker]`, `[admin]`) with `PORTER_*` env overrides; `ParseTOML` is a hand-rolled subset parser. `main.go` refuses to start without `api_token` + admin password.
 - `types.go` — the canonical `VM`/`Project`/`Domain`/etc. structs with JSON tags. VM states: `pending`/`booting`/`running`/`stopping`/`stopped`/`failed`; health: `healthy`/`unhealthy`/`checking`.
 
+**Stage 2 — DNS/TLS (implemented):**
+- `internal/dns/server.go` — real UDP/TCP authoritative DNS server (miekg/dns) for `*.baseDomain` zones, resolves to gateway IP
+- `internal/dns/domains.go` — auto-assigns preview/prod domains on project creation (`<slug>.preview.<base>` and `<slug>.<base>`)
+- `internal/tls/autocert.go` — automatic TLS via Let's Encrypt ACME (`golang.org/x/crypto/acme/autocert`), HTTP-01 challenges, cert caching, daily renewal
+
 **Frontend** (`frontend/`): Vue 3 + Vite + vue-router, dev-proxying API to `localhost:8080` (see `vite.config.js`). `src/api/client.js` is the auth'd `fetch` wrapper (401 → `/login` redirect); `src/api/events.js` consumes the SSE stream. Views: `DeploymentsList`, `ProjectDetail`, `VmDetail`, `Login`. Reusable components in `src/components/`. The README's Dashboard spec lists the target UI (traffic table, domains panel, logs, image picker, log/status UI).
 
 ## When changing code, respect the migration seam

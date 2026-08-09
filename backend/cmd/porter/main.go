@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,8 +29,12 @@ import (
 	"porter/internal/netmgr"
 	rt "porter/internal/runtime"
 	"porter/internal/sshgw"
+	portertls "porter/internal/tls"
 	"porter/internal/store"
 	"porter/internal/types"
+	"porter/internal/volumes"
+	cronrunner "porter/internal/cron"
+	"porter/internal/metrics"
 )
 
 // Version is overridden at build time with -ldflags "-X main.Version=..."
@@ -117,6 +122,26 @@ func runServer(args []string) int {
 	a.SetCustomImagesDir(cfg.CustomImagesDir)
 	a.SetRateLimit(cfg.RateLimitPerMin)
 
+	// Domain auto-assignment: create preview/prod domains for new projects.
+	domainMgr := dns.NewDomainManager(st, cfg.BaseDomain, cfg.GatewayIP)
+	a.SetDomainManager(domainMgr)
+
+	// Real persistent volumes: host dirs + sparse backing images under volumes/.
+	volMgr := volumes.NewManager(cfg.VolumesDir)
+	_ = volMgr.EnsureRoot()
+	a.SetVolumesManager(volMgr)
+
+	// Cron scheduler: fires active crons on their 5-field schedule by booting
+	// short-lived job microVMs through the same runtime as deploys.
+	cronRunner := cronrunner.NewRunner(st, vmm, 30*time.Second)
+	cronRunner.Start()
+	defer cronRunner.Stop()
+
+	// Metrics collector: samples CPU/memory for running VMs on an interval.
+	metricsC := metrics.New(st, 30*time.Second)
+	metricsC.Start()
+	defer metricsC.Stop()
+
 	// Gateway: host-routing reverse proxy + live traffic logger on its own
 	// listener, so the control plane (:8080) and the traffic-facing port stay
 	// separate (Vercel-style: gateway faces *.local / project domains).
@@ -136,6 +161,31 @@ func runServer(args []string) int {
 				log.Fatalf("gateway server error: %v", err)
 			}
 		}()
+	}
+
+	// DNS server: authoritative resolver for *.baseDomain zones.
+	// Listens on UDP/TCP port 53 and resolves queries to gateway IP.
+	if cfg.DNSEnabled && cfg.BaseDomain != "" {
+		gwIP := net.ParseIP(cfg.GatewayIP)
+		if gwIP == nil {
+			gwIP = net.ParseIP("127.0.0.1") // fallback
+		}
+		dnsSrv := dns.NewServer(st, cfg.BaseDomain, gwIP)
+		if err := dnsSrv.Start(":53"); err != nil {
+			log.Printf("dns: failed to start on :53: %v (may need root/cap_net_bind)", err)
+		} else {
+			log.Printf("dns: authoritative server started for *.%s", cfg.BaseDomain)
+			defer dnsSrv.Shutdown()
+		}
+	}
+
+	// TLS: automatic certificate management via Let's Encrypt ACME.
+	// Certificates are cached on disk under certs/ (autocert.DirCache) and
+	// renew automatically on demand.
+	var tlsMgr *portertls.Manager
+	if cfg.TLSEnabled && cfg.BaseDomain != "" && cfg.ACMEEmail != "" {
+		tlsMgr = portertls.NewManager(cfg.BaseDomain, cfg.ACMEEmail, "certs")
+		log.Printf("tls: ACME certificates enabled for *.%s (email: %s)", cfg.BaseDomain, cfg.ACMEEmail)
 	}
 
 	// Health checker: watch running VMs that declare a healthcheck and
@@ -200,7 +250,15 @@ func runServer(args []string) int {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
-	log.Printf("Porter %s — Control API listening on %s", Version, cfg.ListenAddr)
+	// Enable TLS if configured.
+	if tlsMgr != nil {
+		srv.TLSConfig = tlsMgr.GetTLSConfig()
+		// Wrap mux with ACME HTTP challenge handler
+		srv.Handler = tlsMgr.HTTPHandler(mux)
+		log.Printf("Porter %s — Control API listening on %s (HTTPS enabled)", Version, cfg.ListenAddr)
+	} else {
+		log.Printf("Porter %s — Control API listening on %s", Version, cfg.ListenAddr)
+	}
 	log.Printf("Dashboard: http://localhost%s", cfg.ListenAddr)
 	log.Printf("Database: %s  Config: %s", cfg.DatabaseURL, configPath)
 	st.AppendDaemonLog(fmt.Sprintf("=== Porter %s started  pid=%d  http://localhost%s ===", Version, os.Getpid(), cfg.ListenAddr))
@@ -215,7 +273,12 @@ func runServer(args []string) int {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		serverErr <- srv.ListenAndServe()
+		if srv.TLSConfig != nil {
+			// Use ListenAndServeTLS with empty cert/key since autocert handles them
+			serverErr <- srv.ListenAndServeTLS("", "")
+		} else {
+			serverErr <- srv.ListenAndServe()
+		}
 	}()
 
 	select {

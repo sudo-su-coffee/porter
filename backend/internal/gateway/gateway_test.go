@@ -16,6 +16,7 @@ import (
 type fakeStore struct {
 	vms     []*types.VM
 	domains map[string][]*types.Domain
+	rules   []*types.FirewallRule
 	traffic []*types.TrafficEntry
 }
 
@@ -27,8 +28,11 @@ func (f *fakeStore) GetVM(id string) (*types.VM, bool) {
 	}
 	return nil, false
 }
-func (f *fakeStore) ListVMs() []*types.VM                    { return f.vms }
-func (f *fakeStore) ListDomains(vmID string) []*types.Domain { return f.domains[vmID] }
+func (f *fakeStore) ListVMs() []*types.VM                     { return f.vms }
+func (f *fakeStore) ListDomains(vmID string) []*types.Domain  { return f.domains[vmID] }
+func (f *fakeStore) ListFirewallRules(p string) []*types.FirewallRule {
+	return f.rules
+}
 func (f *fakeStore) AddTraffic(vmID string, e *types.TrafficEntry) {
 	f.traffic = append(f.traffic, e)
 }
@@ -86,6 +90,44 @@ func TestGatewayProxiesAndRecordsTraffic(t *testing.T) {
 	}
 	if got := len(gw.Ring().List("vm1", 0)); got != 1 {
 		t.Fatalf("expected 1 ring entry, got %d", got)
+	}
+}
+
+func TestGatewayFirewallBlocksDeny(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	u, _ := url.Parse(backend.URL)
+	host, portStr, _ := net.SplitHostPort(u.Host)
+	port, _ := strconv.Atoi(portStr)
+
+	st := &fakeStore{
+		vms: []*types.VM{healthyVM("vm1", host, port)},
+		rules: []*types.FirewallRule{
+			{ID: "r1", ProjectID: "proj1", Action: "deny", Source: "203.0.113.0/24", Priority: 1, Active: true},
+		},
+	}
+	// Make the VM part of project proj1 so the rule applies.
+	st.vms[0].ProjectID = "proj1"
+	gw := NewGateway(st)
+
+	req := httptest.NewRequest(http.MethodGet, "http://web.myapp.test/", nil)
+	req.RemoteAddr = "203.0.113.9:1234"
+	rr := httptest.NewRecorder()
+	gw.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 from firewall, got %d", rr.Code)
+	}
+
+	// A source outside the denied CIDR passes through.
+	req2 := httptest.NewRequest(http.MethodGet, "http://web.myapp.test/", nil)
+	req2.RemoteAddr = "198.51.100.7:1234"
+	rr2 := httptest.NewRecorder()
+	gw.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for allowed source, got %d", rr2.Code)
 	}
 }
 

@@ -26,11 +26,18 @@ A self-hosted PaaS, one codebase. You give it a Docker/OCI image (or `docker-com
 - **Two in-memory by design:** traffic ring + per-VM log tail (fast path); durable copies in `daemon_logs`, metrics tables.
 
 ## PHASE NOW — known stubs / partials (don't claim these work; check the handler first)
-- Real wire-level DNS server — `.local` resolver only today.
-- TLS / ACME / Let's Encrypt — not yet; `handleVerifyDomain` still reports "verified" as a stub.
-- Real host-port binding — compose `parsePort` drops host port ("8080:80" keeps only 80).
-- Wired 2026-08 to real store/runtime: cache purge/path, env branch/domain, environments/available, pool/drain, host/kernel probe, groups PATCH/DELETE, password forgot/reset (single-tenant policy), builds GET/POST split. Remaining gaps: wire-level DNS server, TLS/ACME, real host-port binding, real volumes, per-user RBAC.
-- Real persistent volumes — DB row only (nothing boots a block device).
+- Real wire-level DNS server — `internal/dns/server.go` is now a real UDP/TCP authoritative server (miekg/dns) for `*.baseDomain`. **[DONE — Stage 2a]**
+- Preview/prod domain auto-assign — `internal/dns/domains.go` auto-assigns on project creation. **[DONE — Stage 2b]**
+- TLS / ACME / Let's Encrypt — `internal/tls/autocert.go` provides automatic cert management via Let's Encrypt with HTTP-01 challenges. **[DONE — Stage 2c]**
+- Real byte-level bandwidth — `TrafficEntry` now carries bytes_in/bytes_out; analytics endpoints report real bytes. **[DONE — Stage 3a]**
+- Web-vitals — beacon endpoint + p75/rating aggregation. **[DONE — Stage 3b]**
+- Real persistent volumes — `internal/volumes` creates real dir + sparse data.img; delete/usage hit disk. **[DONE — Stage 5a]**
+- Per-user RBAC — login issues per-user API tokens; `requireProjectRole` resolves via project_members/org_members PG tables. **[DONE — Stage 6a]**
+- Cron runner — `internal/cron` real 5-field schedule scheduler firing job microVMs. **[DONE — Stage 7a]**
+- Firewall — gateway enforces active deny rules (source IP/CIDR). **[DONE — Stage 8]**
+- Metrics collector — `internal/metrics` samples CPU/mem to metrics_samples table. **[DONE — Stage 10a]**
+- Real host-port binding — compose `parsePort` drops host port ("8080:80" keeps only 80). **[PLANNED]**
+- Remaining gaps: real host-port binding, hardening/release prep (Stage 12).
 
 ## PHASE NEXT — what's needed (maintainer directives + PLAN.md; mark [planned] until seen in source)
 1. **Redis wiring** [NEW]: apply `internal/cache/` optional Redis (cache, sessions, SSE fan-out, rate limits, build queue). Off by default — still works without it.

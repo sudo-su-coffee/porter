@@ -7,6 +7,7 @@ package gateway
 
 import (
 	"context"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ type Store interface {
 	GetVM(id string) (*types.VM, bool)
 	ListVMs() []*types.VM
 	ListDomains(vmID string) []*types.Domain
+	ListFirewallRules(projectID string) []*types.FirewallRule
 	AddTraffic(vmID string, e *types.TrafficEntry)
 }
 
@@ -116,16 +118,29 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Round-robin across the healthy replica pool (least-connections can be
 	// layered on later; round-robin is correct and stateless).
 	vm := vms[int(g.rr.Add(1))%len(vms)]
+
+	// Firewall: enforce the project's active deny rules before proxying.
+	if rule := g.blockedByFirewall(vm.ProjectID, r); rule != nil {
+		g.logger.Printf("firewall: blocked %s %s from %s by rule %s (%s)", r.Method, r.URL.Path, r.RemoteAddr, rule.ID, rule.Source)
+		http.Error(w, "blocked by firewall", http.StatusForbidden)
+		return
+	}
+
 	target, ok := targetAddress(vm)
 	if !ok {
 		http.Error(w, "vm has no address", http.StatusServiceUnavailable)
 		return
 	}
 
-	rw := NewResponseWriter(w)
+	rec := &responseRecorder{ResponseWriter: w, status: 200}
+	// Wrap the request body in a counting reader so uploads report real bytes.
+	reqIn := &countingReader{r: r.Body}
+	if r.Body != nil {
+		r.Body = reqIn
+	}
 	start := time.Now()
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ServeHTTP(rw, r)
+	proxy.ServeHTTP(rec, r)
 	dur := time.Since(start).Milliseconds()
 
 	entry := &types.TrafficEntry{
@@ -133,12 +148,66 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Method:     r.Method,
 		Host:       r.Host,
 		Path:       r.URL.Path,
-		Status:     statusCode(rw),
+		Status:     rec.status,
 		DurationMS: int(dur),
 		RemoteIP:   r.RemoteAddr,
+		BytesIn:    reqIn.n,
+		BytesOut:   rec.bytes,
 	}
 	g.ring.Add(vm.ID, entry)
 	g.store.AddTraffic(vm.ID, entry)
+}
+
+// blockedByFirewall returns the first active deny rule that matches the
+// request (by source IP/CIDR), or nil when the request is allowed. Rules with
+// a Source are matched as exact IP or CIDR; empty-source deny rules apply to
+// every request for the project. Order follows Priority (lower = applied first),
+// matching a sorted rule evaluation.
+func (g *Gateway) blockedByFirewall(projectID string, r *http.Request) *types.FirewallRule {
+	if projectID == "" {
+		return nil
+	}
+	ip := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		ip = h
+	}
+	// Evaluate deny rules highest-priority first (lower Priority value = higher).
+	rules := g.store.ListFirewallRules(projectID)
+	best := []*types.FirewallRule{}
+	for _, fr := range rules {
+		if fr == nil || !fr.Active || fr.Action != "deny" {
+			continue
+		}
+		best = append(best, fr)
+	}
+	for i := 0; i < len(best); i++ {
+		for j := i + 1; j < len(best); j++ {
+			if best[j].Priority < best[i].Priority {
+				best[i], best[j] = best[j], best[i]
+			}
+		}
+	}
+	for _, fr := range best {
+		if sourceMatches(fr.Source, ip) {
+			return fr
+		}
+	}
+	return nil
+}
+
+// sourceMatches checks an exact IP or CIDR match (empty source matches all).
+func sourceMatches(source, ip string) bool {
+	if source == "" || source == "*" || source == "0.0.0.0/0" {
+		return true
+	}
+	if source == ip {
+		return true
+	}
+	if _, cidr, err := net.ParseCIDR(source); err == nil {
+		parsed := net.ParseIP(ip)
+		return parsed != nil && cidr.Contains(parsed)
+	}
+	return false
 }
 
 // backendsFor finds healthy VMs that serve the given domain: direct match on
@@ -194,11 +263,13 @@ func statusCode(w http.ResponseWriter) int {
 	return 200
 }
 
-// responseRecorder decorates a ResponseWriter to capture a status (wrapped
-// around the real writer by callers that want traffic status codes).
+// responseRecorder decorates a ResponseWriter to capture a status code and the
+// number of response bytes written (wrapped around the real writer by callers
+// that want traffic status + bandwidth).
 type responseRecorder struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
 func (rw *responseRecorder) WriteHeader(code int) {
@@ -206,10 +277,35 @@ func (rw *responseRecorder) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// NewResponseWriter wraps w with a status recorder.
+func (rw *responseRecorder) Write(p []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(p)
+	rw.bytes += int64(n)
+	return n, err
+}
+
+// Bytes returns the number of response bytes written so far.
+func (rw *responseRecorder) Bytes() int64 { return rw.bytes }
+
+// NewResponseWriter wraps w with a status + byte recorder.
 func NewResponseWriter(w http.ResponseWriter) http.ResponseWriter {
 	return &responseRecorder{ResponseWriter: w, status: 200}
 }
+
+// countingReader wraps an io.ReadCloser (e.g. a request body) and counts the
+// total number of bytes read through it — the request side of byte-level
+// bandwidth. Close is forwarded so the request body lifecycle is unchanged.
+type countingReader struct {
+	r io.ReadCloser
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *countingReader) Close() error { return c.r.Close() }
 
 // targetAddress builds the upstream URL for a VM from its IP and the first
 // mapped (host) port. Host port defaults to the container port.

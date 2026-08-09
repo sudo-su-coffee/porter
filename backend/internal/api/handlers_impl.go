@@ -33,6 +33,7 @@ import (
 	"porter/internal/compose"
 	"porter/internal/store"
 	"porter/internal/types"
+	"porter/internal/volumes"
 )
 
 // osHostname is an injectable alias so tests can stub the hostname.
@@ -104,14 +105,34 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"token": a.token, "user": map[string]any{"username": req.Username, "role": "admin"}})
 		return
 	}
-	// Additional users in the store.
+	// Additional users in the store — each login issues a per-user API token so
+	// the bearer credential resolves back to that user (per-user RBAC).
 	if user, ok := a.store.GetUserByUsername(req.Username); ok {
 		if constantTimeEqual(passwordHash(req.Password, user.Salt), user.PasswordHash) {
-			writeJSON(w, http.StatusOK, map[string]any{"token": a.token, "user": user})
+			token, err := a.issueUserToken(user)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to issue token")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": user})
 			return
 		}
 	}
 	writeError(w, http.StatusUnauthorized, "invalid username or password")
+}
+
+// issueUserToken creates a fresh API key for a user and returns its raw token.
+func (a *API) issueUserToken(user *types.User) (string, error) {
+	raw := store.NewID() + store.NewID() // 64 hex chars — unguessable
+	k := &types.APIKey{
+		ID:        store.NewID(),
+		UserID:    user.Username,
+		Name:      "session",
+		TokenHash: hashToken(raw),
+		CreatedAt: time.Now(),
+	}
+	a.store.PutAPIKey(k)
+	return raw, nil
 }
 
 func (a *API) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -2345,14 +2366,17 @@ func (a *API) projectTraffic(projectID string, limit int) []*types.TrafficEntry 
 
 func (a *API) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
 	tr := a.projectTraffic(a.projectID(r), 200)
-	var bw int64
+	var in, out int64
 	for _, e := range tr {
-		bw += int64(e.DurationMS) // approximate bytes by latency-scaled weight
+		in += e.BytesIn
+		out += e.BytesOut
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project_id":  a.projectID(r),
 		"requests":    len(tr),
-		"bandwidth":   bw,
+		"bandwidth":   in + out,
+		"bytes_in":    in,
+		"bytes_out":   out,
 		"invocations": len(tr),
 	})
 }
@@ -2400,11 +2424,17 @@ func (a *API) handleAnalyticsStatusCodes(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *API) handleAnalyticsBandwidth(w http.ResponseWriter, r *http.Request) {
-	var bw int64
+	var in, out int64
 	for _, e := range a.projectTraffic(a.projectID(r), 500) {
-		bw += int64(e.DurationMS)
+		in += e.BytesIn
+		out += e.BytesOut
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bandwidth_bytes": bw, "project_id": a.projectID(r)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bandwidth_bytes": in + out,
+		"bytes_in":        in,
+		"bytes_out":       out,
+		"project_id":      a.projectID(r),
+	})
 }
 
 func (a *API) handleAnalyticsRequests(w http.ResponseWriter, r *http.Request) {
@@ -2417,31 +2447,108 @@ func (a *API) handleAnalyticsInvocations(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"invocations": len(tr), "project_id": a.projectID(r)})
 }
 
-func (a *API) handleWebVitals(w http.ResponseWriter, r *http.Request) {
-	// Web-vitals aggregate the same traffic ring; LCP/CLS come from a browser
-	// beacon that Porter's gateway injects as synthetic traffic with Status 299.
-	tr := a.projectTraffic(a.projectID(r), 200)
-	var lcp, cls float64
-	for _, e := range tr {
-		if e.Status == 299 {
-			cls += 0.01
-			lcp += float64(e.DurationMS)
-		}
+func (a *API) handleWebVitalsBeacon(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path   string             `json:"path"`
+		Values map[string]float64 `json:"values"` // lcp_ms, cls, inp_ms, ttfb_ms
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"web_vitals": []map[string]any{
-			{"metric": "LCP", "value": lcp / float64(max(1, len(tr)))},
-			{"metric": "CLS", "value": cls},
-		},
-		"project_id": a.projectID(r),
-	})
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	projID := a.projectID(r)
+	now := time.Now()
+	for metric, value := range req.Values {
+		if value < 0 {
+			continue
+		}
+		a.store.AddVital(&types.WebVital{
+			ProjectID: projID,
+			Path:      req.Path,
+			Metric:    metric,
+			Value:     value,
+			Rating:    vitalRating(metric, value),
+			Timestamp: now,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "recorded", "count": len(req.Values)})
+}
+
+// vitalRating classifies a Core Web Vital value against the field thresholds.
+func vitalRating(metric string, v float64) string {
+	switch metric {
+	case "lcp_ms":
+		if v <= 2500 {
+			return "good"
+		}
+		if v <= 4000 {
+			return "needs-improvement"
+		}
+		return "poor"
+	case "cls":
+		if v <= 0.1 {
+			return "good"
+		}
+		if v <= 0.25 {
+			return "needs-improvement"
+		}
+		return "poor"
+	case "inp_ms":
+		if v <= 200 {
+			return "good"
+		}
+		if v <= 500 {
+			return "needs-improvement"
+		}
+		return "poor"
+	default: // ttfb_ms
+		if v <= 800 {
+			return "good"
+		}
+		if v <= 1800 {
+			return "needs-improvement"
+		}
+		return "poor"
+	}
+}
+
+func (a *API) handleWebVitals(w http.ResponseWriter, r *http.Request) {
+	vs := a.store.ListVitals(a.projectID(r), 200)
+	// Aggregate per metric: p75 value + count + good/poor ratio.
+	byMetric := map[string][]float64{}
+	for _, v := range vs {
+		byMetric[v.Metric] = append(byMetric[v.Metric], v.Value)
+	}
+	out := make([]map[string]any, 0, len(byMetric))
+	for m, vals := range byMetric {
+		if len(vals) == 0 {
+			continue
+		}
+		sort.Float64s(vals)
+		p75 := vals[(len(vals)-1)*3/4]
+		good := 0
+		for _, v := range vals {
+			if vitalRating(m, v) == "good" {
+				good++
+			}
+		}
+		out = append(out, map[string]any{
+			"metric":  m,
+			"p75":     p75,
+			"count":   len(vals),
+			"good":    good,
+			"percent": float64(good*100) / float64(len(vals)),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["count"].(int) > out[j]["count"].(int) })
+	writeJSON(w, http.StatusOK, map[string]any{"web_vitals": out, "project_id": a.projectID(r)})
 }
 
 func (a *API) handleWebVitalsTimeseries(w http.ResponseWriter, r *http.Request) {
-	tr := a.projectTraffic(a.projectID(r), 50)
-	series := make([]map[string]any, 0, len(tr))
-	for _, e := range tr {
-		series = append(series, map[string]any{"t": e.Timestamp.Format("15:04"), "lcp": e.DurationMS, "cls": 0})
+	vs := a.store.ListVitals(a.projectID(r), 100)
+	series := make([]map[string]any, 0, len(vs))
+	for _, v := range vs {
+		series = append(series, map[string]any{"t": v.Timestamp.Format("15:04"), "metric": v.Metric, "value": v.Value})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"series": series, "project_id": a.projectID(r)})
 }
@@ -2635,6 +2742,17 @@ func (a *API) handleCreateVolume(w http.ResponseWriter, r *http.Request) {
 		req.SizeMiB = 1024
 	}
 	v := &types.Volume{ID: store.NewID(), ProjectID: a.projectID(r), Name: req.Name, SizeMiB: req.SizeMiB, Path: req.MountPath, CreatedAt: time.Now()}
+
+	// Real provisioning: create the host directory + sparse backing image.
+	if a.volMgr != nil {
+		hostPath, err := a.volMgr.Create(volumes.SanitizeID(v.ID), v.SizeMiB)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to provision volume: "+err.Error())
+			return
+		}
+		v.Path = hostPath
+	}
+
 	a.store.PutVolume(v)
 	writeJSON(w, http.StatusCreated, v)
 }
@@ -2648,7 +2766,12 @@ func (a *API) handleGetVolume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleDeleteVolume(w http.ResponseWriter, r *http.Request) {
-	if a.store.DeleteVolume(r.PathValue("volumeId")) {
+	id := r.PathValue("volumeId")
+	if a.store.DeleteVolume(id) {
+		// Remove the real backing directory (best-effort; ignore missing dir).
+		if a.volMgr != nil {
+			_ = a.volMgr.Delete(volumes.SanitizeID(id))
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 		return
 	}
@@ -2676,21 +2799,17 @@ func (a *API) handleVolumeUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "volume not found")
 		return
 	}
-	// Real disk usage on the host directory backing the volume (best-effort).
+	// Real disk usage on the host directory backing the volume.
 	var used int64
-	if v.Path != "" {
-		_ = filepath.Walk(v.Path, func(_ string, info os.FileInfo, err error) error {
-			if err != nil {
-				return filepath.SkipDir
-			}
-			if !info.IsDir() {
-				used += info.Size()
-			}
-			return nil
-		})
+	if a.volMgr != nil {
+		used, _ = a.volMgr.Usage(volumes.SanitizeID(v.ID))
 	}
 	limit := int64(v.SizeMiB) * 1024 * 1024
-	writeJSON(w, http.StatusOK, map[string]any{"used_bytes": used, "limit_bytes": limit, "volume": v.ID, "path": v.Path})
+	path := v.Path
+	if path == "" && a.volMgr != nil {
+		path = a.volMgr.Path(volumes.SanitizeID(v.ID))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"used_bytes": used, "limit_bytes": limit, "volume": v.ID, "path": path})
 }
 
 // ---------------------------------------------------------------------------

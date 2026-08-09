@@ -110,6 +110,22 @@ listen_addr = ":80"
 enabled = true
 #   Override: PORTER_DNS_ENABLED
 
+# gateway_ip — public IP address for DNS A records (*.baseDomain).
+# Used by the authoritative DNS server to route traffic to the gateway.
+gateway_ip = "127.0.0.1"
+#   Override: PORTER_GATEWAY_IP
+
+# ---------------------------------------------------------------------------
+[tls]
+# enabled — automatic HTTPS via Let's Encrypt ACME.
+# Requires acme_email and a valid base_domain.
+enabled = false
+#   Override: PORTER_TLS_ENABLED
+
+# acme_email — email for Let's Encrypt account (receives expiry warnings).
+acme_email = ""
+#   Override: PORTER_ACME_EMAIL
+
 # ---------------------------------------------------------------------------
 [health]
 # enabled — per-VM healthcheck + auto-replace of unhealthy VMs.

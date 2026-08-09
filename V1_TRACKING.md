@@ -188,18 +188,23 @@ Polish:
 | 1 | `e0271ec` | feat: wire 12 stub/partial handlers |
 | 1 | `d8e4849` | docs: update skill stub list |
 | 2–8,10a | `274836e` | feat: DNS/TLS, bandwidth, web-vitals, volumes, RBAC, cron, firewall, metrics |
-| 2a | `wip` | feat: stdlib authoritative DNS server (miekg/dns) |
-| 2b | `wip` | feat: preview/prod domain auto-assign |
-| 2c | `wip` | feat: TLS via ACME (Let's Encrypt) |
-| 3a | `wip` | feat: real byte-level bandwidth (bytes_in/bytes_out) |
-| 3b | `wip` | feat: web-vitals beacon + p75/rating aggregation |
-| 4a | `done` | feat: multiple base vmlinux (per-VM kernel already honored at runtime) |
-| 5a | `wip` | feat: real persistent volumes (dir + sparse image) |
-| 6a | `wip` | feat: per-user RBAC via project_members/org_members (PG) |
-| 7a | `wip` | feat: cron runner (5-field schedule scheduler) |
-| 8 | `wip` | feat: firewall/WAF enforcement in gateway |
-| 10a | `wip` | feat: metrics collector (CPU/mem samples) |
-| 12 | — | TBD: hardening & release prep |
+| 2–8,10a | `89b35a0` | feat: startup checks, autoscaler, drop dead vmmanager |
+| RBAC v2 | `156a2fd` | feat: fine-grained permission RBAC + routePerms + usage metering |
+| 7.5/3b | `55d3913` | feat: rolling checks + rollout weight + Redis cache |
+| RBAC v2 | `eabd1c8` | fix: dedupe routes + complete routePerms coverage |
+| git-deploy | `ec75f1a` | feat: real OCI build bridge (docker/buildctl→containerd) |
+| 2a | `done` | stdlib authoritative DNS server (miekg/dns) |
+| 2b | `done` | preview/prod domain auto-assign |
+| 2c | `done` | TLS via ACME (Let's Encrypt) |
+| 3a | `done` | real byte-level bandwidth |
+| 3b | `done` | web-vitals beacon + ratings |
+| 4a | `done` | multiple base vmlinux (per-VM kernel) |
+| 5a | `done` | real persistent volumes |
+| 6a | `done` | per-user RBAC (permission-based) |
+| 7a | `done` | cron runner |
+| 8 | `done` | firewall enforcement in gateway |
+| 10a | `done` | metrics collector |
+| 12 | `wip` | hardening & release prep (docs/frontend remain) |
 
 ---
 

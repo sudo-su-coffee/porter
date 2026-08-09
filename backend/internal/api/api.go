@@ -394,10 +394,6 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /projects/{projectId}/deployments/{deployId}/checks/{checkName}", a.auth(a.handleSetDeploymentCheck))
 	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/rollout", a.auth(a.handleSetDeploymentRollout))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/logs", a.auth(a.handleDeploymentLogs))
-	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/checks", a.auth(a.handleGetDeploymentChecks))
-	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/checks", a.auth(a.handleUpsertDeploymentChecks))
-	mux.HandleFunc("PATCH /projects/{projectId}/deployments/{deployId}/checks/{checkName}", a.auth(a.handleSetDeploymentCheck))
-	mux.HandleFunc("PUT /projects/{projectId}/deployments/{deployId}/rollout", a.auth(a.handleSetDeploymentRollout))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/{deployId}/promote", a.auth(a.handlePromoteDeployment))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/{deployId}/rollback", a.auth(a.handleRollbackDeployment))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/source", a.auth(a.handleDeploymentSource))
@@ -737,6 +733,7 @@ var routePerms = map[string]string{
 	"POST /projects/{projectId}/restart":               "project.restart",
 	"POST /projects/{projectId}/export":                "project.export",
 	"POST /projects/{projectId}/import":                "project.import",
+	"PUT /projects/{projectId}/ssh":                    "ssh.toggle",
 	"GET /projects/{projectId}/scale":                  "replica.list",
 	"PATCH /projects/{projectId}/scale":                "project.scale",
 	"GET /projects/{projectId}/healthcheck":            "project.read",
@@ -806,6 +803,7 @@ var routePerms = map[string]string{
 	"GET /projects/{projectId}/crons":                  "cron.create",
 	"POST /projects/{projectId}/crons":                 "cron.create",
 	"GET /projects/{projectId}/crons/history":          "cron.update",
+	"GET /projects/{projectId}/crons/{cronId}":         "cron.create",
 	"PATCH /projects/{projectId}/crons/{cronId}":       "cron.update",
 	"DELETE /projects/{projectId}/crons/{cronId}":      "cron.delete",
 	"POST /projects/{projectId}/crons/{cronId}/run":    "cron.run",
@@ -949,12 +947,18 @@ var routePerms = map[string]string{
 	"POST /projects/{projectId}/services/{serviceName}/scale": "project.scale",
 	"GET /projects/{projectId}/rollouts":               "deployment.list",
 	// org / groups (org-scoped)
-	"GET /orgs/members":           "member.list",
-	"POST /orgs/members":          "org.member.add",
+	"GET /orgs":                     "project.read",
+	"POST /orgs":                    "org.member.role",
+	"GET /orgs/default":             "project.read",
+	"GET /orgs/current":             "project.read",
+	"PATCH /orgs/current":           "org.settings",
+	"DELETE /orgs/current":          "org.settings",
+	"GET /orgs/members":             "member.list",
+	"POST /orgs/members":            "org.member.add",
 	"PATCH /orgs/members/{username}": "org.member.role",
 	"DELETE /orgs/members/{username}": "org.member.remove",
-	"GET /orgs/audit":             "org.audit",
-	"POST /orgs/transfer":         "org.transfer",
+	"GET /orgs/audit":               "org.audit",
+	"POST /orgs/transfer":           "org.transfer",
 	"GET /groups":                 "group.create",
 	"POST /groups":                "group.create",
 	"GET /groups/{groupId}":       "project.read",

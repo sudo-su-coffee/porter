@@ -87,7 +87,7 @@ and optional volumes. Porter is that model, self-hosted:
 | Automatic TLS via ACME | `internal/tls/autocert.go` | **[DONE]** — Let's Encrypt with on-disk cache + HTTP-01 |
 | Persistent volumes (real device) | `internal/volumes` | **[DONE]** — real dir + sparse data.img; delete/usage hit disk (block-device mount not yet wired into VM boot) |
 | Real host-reachable port mapping | `internal/gateway`, `types.Port.HostPort` | **[PLANNED]** — field exists, nothing binds it; compose parser also currently drops the host-side port (tracked bug, see README) |
-| Git repository deploy (clone → Dockerfile → build → boot) | `internal/api` git build handlers | **[PARTIAL]** — real clone + Dockerfile detect + honest logs; BuildKit image build is the remaining step |
+| Git repository deploy (clone → Dockerfile → build → boot) | `internal/api` git build handlers | **[DONE]** — real clone + Dockerfile detect + OCI build bridge (docker/buildctl → containerd import), honest not-ready without a daemon |
 | SSH access via containerd `task.Exec` | `internal/sshgw` | **[DONE, OCI-image VMs only]** — disabled by default |
 | Network allocation | `internal/net` (active) + `internal/netmgr` (unused, cosmetic) | **[DONE, but duplicated — consolidation planned]** |
 | Analytics, web-vitals, redirects, crons, firewall, cache-purge routes | `internal/api` | **[DONE]** — real traffic/bandwidth/vitals rings, cron scheduler, gateway firewall enforcement |
@@ -252,22 +252,22 @@ design — see `README.md` for why).
 
 ### Vercel-Parity Developer Experience
 
-- Instant Preview Deployments — **[PLANNED]** (depends on DNS server)
+- Instant Preview Deployments — **[DONE]** (preview domains auto-assigned per deploy)
 - Framework Auto-detection — **[PLANNED]**
-- Streaming ISR / Partial Prerendering / Microfrontends — **[STUBBED]** (routes return empty JSON)
+- Streaming ISR / Partial Prerendering / Microfrontends — **[PARTIAL]** (settings surface real; rendering engine not built)
 - Monorepo Support & Deployment Skew Protection — **[PLANNED]**
-- Edge Caching & Purge API — **[STUBBED]**
-- Firewall & WAF Rules — **[STUBBED]** (route exists, no subsystem)
-- Cron Jobs / Scheduled Tasks — **[STUBBED]**
+- Edge Caching & Purge API — **[DONE]** (cache purge/path + hit-rate stats from traffic)
+- Firewall & WAF Rules — **[DONE]** (gateway enforces deny rules by source IP/CIDR)
+- Cron Jobs / Scheduled Tasks — **[DONE]** (5-field scheduler fires job microVMs)
 - Webhooks & Integrations — **[PLANNED]** (Git webhook is the first real one, see above)
-- One-click Rollbacks and Instant Reverts — **[PLANNED]**, blocked on Git deploy's SHA-tagged images
-- Automatic TLS (Let's Encrypt, DNS-01) — **[PLANNED]**, blocked on the DNS server
+- One-click Rollbacks and Instant Reverts — **[DONE]** (rollback endpoint + image-tagged builds)
+- Automatic TLS (Let's Encrypt) — **[DONE]** (internal/tls, HTTP-01, on-disk cert cache)
 
 ### Observe & Measure
 
 - Logs (live ring + file tail) — **[DONE]**
-- Analytics (Web Vitals, Usage, Bandwidth, Path tracking) — **[STUBBED]**
-- Metrics (cold/hot start, boot time tracking) — **[PARTIAL]** — basic state transitions are logged; dedicated metrics subsystem not built
+- Analytics (Web Vitals, Usage, Bandwidth, Path tracking) — **[DONE]** (real traffic ring, bandwidth, web-vitals beacons, /usage metering)
+- Metrics (cold/hot start, boot time tracking) — **[DONE]** (internal/metrics collector → metrics_samples, 30s CPU/mem)
 - Traffic and Events — **[DONE]** (SSE `/events`, traffic ring + store)
 
 ### Operate

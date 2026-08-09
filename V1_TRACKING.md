@@ -187,7 +187,7 @@ Polish:
 | 1 | `946c065` | refactor: consolidate 40→3 migrations |
 | 1 | `e0271ec` | feat: wire 12 stub/partial handlers |
 | 1 | `d8e4849` | docs: update skill stub list |
-| 2–8,10a | `491a4b5` | feat: DNS/TLS, bandwidth, web-vitals, volumes, RBAC, cron, firewall, metrics |
+| 2–8,10a | `274836e` | feat: DNS/TLS, bandwidth, web-vitals, volumes, RBAC, cron, firewall, metrics |
 | 2a | `wip` | feat: stdlib authoritative DNS server (miekg/dns) |
 | 2b | `wip` | feat: preview/prod domain auto-assign |
 | 2c | `wip` | feat: TLS via ACME (Let's Encrypt) |

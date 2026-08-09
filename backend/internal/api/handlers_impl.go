@@ -515,6 +515,47 @@ func (a *API) handlePutHealthcheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, proj.Healthcheck)
 }
 
+func (a *API) handleGetAutoscale(w http.ResponseWriter, r *http.Request) {
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if proj.Autoscale == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, proj.Autoscale)
+}
+
+func (a *API) handlePutAutoscale(w http.ResponseWriter, r *http.Request) {
+	var p types.AutoscalePolicy
+	if err := readJSON(r, &p); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if p.MaxReplicas <= 0 {
+		p.MaxReplicas = 3
+	}
+	if p.MinReplicas < 0 {
+		p.MinReplicas = 0
+	}
+	if p.MinReplicas >= p.MaxReplicas {
+		p.MinReplicas = p.MaxReplicas - 1
+	}
+	if p.TargetCPU <= 0 {
+		p.TargetCPU = 80
+	}
+	proj.Autoscale = &p
+	a.store.PutProject(proj)
+	writeJSON(w, http.StatusOK, proj.Autoscale)
+}
+
 // ---------------------------------------------------------------------------
 // Env & Secrets
 // ---------------------------------------------------------------------------

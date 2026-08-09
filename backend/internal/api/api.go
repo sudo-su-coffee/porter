@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"porter/internal/autoscale"
 	"porter/internal/compose"
 	"porter/internal/dns"
 	"porter/internal/event"
@@ -32,7 +33,8 @@ const HeaderOrgID = "X-Porter-Org-Id"
 // HeaderUserID is the header used to pass the acting user (optional, falls back to admin).
 const HeaderUserID = "X-Porter-User-Id"
 
-// VMRunner is the executor the API boots replicas through (*vmmanager.Manager).
+// VMRunner is the executor the API boots replicas through (the runtime's
+// VMManager, adapted by cmd/porter's vmEngine).
 type VMRunner interface {
 	Boot(ctx context.Context, vm *types.VM) error
 	Stop(ctx context.Context, vm *types.VM) error
@@ -131,6 +133,22 @@ func (a *API) SetDomainManager(dm *dns.DomainManager) { a.domainMgr = dm }
 
 // SetVolumesManager configures the real persistent-volume manager.
 func (a *API) SetVolumesManager(vm *volumes.Manager) { a.volMgr = vm }
+
+// StartAutoscaler runs the horizontal autoscaler in the background for
+// projects with an AutoscalePolicy. interval is the load-poll cadence.
+func (a *API) StartAutoscaler(interval time.Duration) {
+	sc := autoscale.New(a.store,
+		func(ctx context.Context, proj *types.Project, idx int) {
+			a.bootReplica(proj, createProjectReq{Name: proj.Name, Image: proj.Image, Replicas: 1, Env: proj.Env, Ports: a.projPorts(proj)}, idx)
+		},
+		func(ctx context.Context, vmID string) {
+			if vm, ok := a.store.GetVM(vmID); ok {
+				_ = a.vmm.Stop(ctx, vm)
+			}
+		},
+		interval)
+	sc.Start()
+}
 
 // SetCustomImagesDir configures the directory user-uploaded microVM images
 // are unpacked into (must be set before /images/custom is used).
@@ -305,6 +323,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /projects/{projectId}/scale", a.auth(a.requireProjectRole(a.handleScale, "member")))
 	mux.HandleFunc("GET /projects/{projectId}/healthcheck", a.auth(a.requireProjectRole(a.handleGetHealthcheck, "viewer")))
 	mux.HandleFunc("PUT /projects/{projectId}/healthcheck", a.auth(a.requireProjectRole(a.handlePutHealthcheck, "member")))
+	mux.HandleFunc("GET /projects/{projectId}/autoscale", a.auth(a.requireProjectRole(a.handleGetAutoscale, "viewer")))
+	mux.HandleFunc("PUT /projects/{projectId}/autoscale", a.auth(a.requireProjectRole(a.handlePutAutoscale, "member")))
 	mux.HandleFunc("POST /projects/{projectId}/restart", a.auth(a.requireProjectRole(a.handleRestartProject, "member")))
 
 	// ========== Project: Env & Secrets ==========

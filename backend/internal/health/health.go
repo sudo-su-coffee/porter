@@ -42,7 +42,7 @@ type Checker struct {
 }
 
 // New builds a checker. onReplace is called when an unhealthy VM should be
-// replaced; the caller wires it to vmmanager.Restart/Boot.
+// replaced; the caller wires it to the runtime's Restart/Boot.
 func New(store Store, hub Hub, onReplace func(ctx context.Context, vmID string)) *Checker {
 	return &Checker{store: store, hub: hub, onReplace: onReplace, timeout: 3 * time.Second}
 }

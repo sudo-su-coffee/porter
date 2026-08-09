@@ -29,6 +29,7 @@ import (
 	"porter/internal/netmgr"
 	rt "porter/internal/runtime"
 	"porter/internal/sshgw"
+	"porter/internal/startup"
 	portertls "porter/internal/tls"
 	"porter/internal/store"
 	"porter/internal/types"
@@ -93,6 +94,19 @@ func runServer(args []string) int {
 		log.Fatalf("config error: %v", err)
 	}
 
+	// Startup sanity check: fail loudly now if the runtime prerequisites
+	// (containerd, KVM, firecracker) look misconfigured, not on first VM boot.
+	for _, c := range startup.Check(cfg) {
+		status := "OK  "
+		if !c.OK {
+			status = "FAIL"
+		}
+		log.Printf("startup: [%s] %-18s %s", status, c.Name, c.Message)
+		if !c.OK && c.Fatal {
+			log.Fatalf("startup: fatal prerequisite missing: %s (%s)", c.Name, c.Message)
+		}
+	}
+
 	st := store.NewStore(cfg.DatabaseURL)
 	defer st.Close()
 	hub := event.NewHub()
@@ -141,6 +155,11 @@ func runServer(args []string) int {
 	metricsC := metrics.New(st, 30*time.Second)
 	metricsC.Start()
 	defer metricsC.Stop()
+
+	// Horizontal autoscaler: adjusts replica pools per AutoscalePolicy.
+	if cfg.AutoscaleEnabled {
+		a.StartAutoscaler(30 * time.Second)
+	}
 
 	// Gateway: host-routing reverse proxy + live traffic logger on its own
 	// listener, so the control plane (:8080) and the traffic-facing port stay

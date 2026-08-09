@@ -37,6 +37,7 @@ type Config struct {
 	KernelImage    string // shared vmlinux for the shim (provision with `porter kernel set`)
 	RootfsPath     string
 	FirecrackerBin string
+	JailerBin      string // optional: jailer binary for the startup sanity check
 
 	ImagesDir string // directory of vms/images/*.json image-catalog manifests
 
@@ -74,6 +75,10 @@ type Config struct {
 	// VolumesDir is where real persistent volume data lives (one dir per volume
 	// with a sparse data.img of the requested size). Defaults to ./volumes.
 	VolumesDir string
+
+	// AutoscaleEnabled turns on the horizontal autoscaler (polls project load
+	// and adjusts replica pools per each project's AutoscalePolicy).
+	AutoscaleEnabled bool
 
 	AdminUsername string
 	AdminPassword string
@@ -125,6 +130,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.ImagesDir = tomlGet(sections, "firecracker", "images_dir", cfg.ImagesDir)
 		cfg.CustomImagesDir = tomlGet(sections, "firecracker", "custom_images_dir", cfg.CustomImagesDir)
 		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
+		cfg.JailerBin = tomlGet(sections, "firecracker", "jailer_bin", cfg.JailerBin)
 		cfg.RateLimitPerMin = tomlInt(sections, "server", "rate_limit_per_min", cfg.RateLimitPerMin)
 		cfg.GatewayEnabled = tomlBool(sections, "gateway", "enabled", cfg.GatewayEnabled)
 		cfg.GatewayListenAddr = tomlGet(sections, "gateway", "listen_addr", cfg.GatewayListenAddr)
@@ -138,6 +144,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.ACMEEmail = tomlGet(sections, "tls", "acme_email", cfg.ACMEEmail)
 		cfg.GatewayIP = tomlGet(sections, "dns", "gateway_ip", cfg.GatewayIP)
 		cfg.VolumesDir = tomlGet(sections, "server", "volumes_dir", cfg.VolumesDir)
+		cfg.AutoscaleEnabled = tomlBool(sections, "autoscale", "enabled", cfg.AutoscaleEnabled)
 	case os.IsNotExist(err):
 		// No porter.toml — fine, env vars / defaults carry the config.
 	default:
@@ -172,6 +179,7 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.ACMEEmail = envOr("PORTER_ACME_EMAIL", cfg.ACMEEmail)
 	cfg.GatewayIP = envOr("PORTER_GATEWAY_IP", cfg.GatewayIP)
 	cfg.VolumesDir = envOr("PORTER_VOLUMES_DIR", cfg.VolumesDir)
+	cfg.AutoscaleEnabled = envBool("PORTER_AUTOSCALE_ENABLED", cfg.AutoscaleEnabled)
 
 	if cfg.APIToken == "" {
 		return nil, fmt.Errorf("no API token configured — set [server] api_token in %s or PORTER_API_TOKEN", path)

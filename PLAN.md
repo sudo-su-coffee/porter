@@ -82,15 +82,17 @@ and optional volumes. Porter is that model, self-hosted:
 | UI-native multi-service definition (no YAML) | `frontend/` + API | **[PLANNED]** |
 | Reverse proxy / traffic gateway (Host-header routing) | `internal/gateway` | **[DONE, HTTP only — no TLS termination]** |
 | Health checks + auto-replace on failure | `internal/health` | **[DONE]** |
-| `.local` service discovery | `internal/dns` | **[DONE, in-process resolver only — not a wire-level DNS server]** |
-| Authoritative DNS server for preview/production domains | *(new package planned)* | **[PLANNED]** |
-| Automatic TLS via ACME / DNS-01 | depends on DNS server above | **[PLANNED]** — domain verify endpoint is currently a stub that always reports `"verified"` |
-| Persistent volumes (real block device mount) | `internal/store` (DB row only today) | **[PLANNED]** — `POST /volumes` writes a database row only; nothing attaches or mounts a device yet |
+| `.local` service discovery | `internal/dns` | **[DONE]** |
+| Authoritative DNS server for preview/production domains | `internal/dns/server.go` | **[DONE]** — UDP/TCP authoritative server (miekg/dns) for `*.baseDomain` |
+| Automatic TLS via ACME | `internal/tls/autocert.go` | **[DONE]** — Let's Encrypt with on-disk cache + HTTP-01 |
+| Persistent volumes (real device) | `internal/volumes` | **[DONE]** — real dir + sparse data.img; delete/usage hit disk (block-device mount not yet wired into VM boot) |
 | Real host-reachable port mapping | `internal/gateway`, `types.Port.HostPort` | **[PLANNED]** — field exists, nothing binds it; compose parser also currently drops the host-side port (tracked bug, see README) |
-| Git repository deploy (clone → Dockerfile → build → boot) | *(new package planned)* | **[PLANNED]** — see § Git-to-VM Pipeline below |
+| Git repository deploy (clone → Dockerfile → build → boot) | `internal/api` git build handlers | **[PARTIAL]** — real clone + Dockerfile detect + honest logs; BuildKit image build is the remaining step |
 | SSH access via containerd `task.Exec` | `internal/sshgw` | **[DONE, OCI-image VMs only]** — disabled by default |
 | Network allocation | `internal/net` (active) + `internal/netmgr` (unused, cosmetic) | **[DONE, but duplicated — consolidation planned]** |
-| Analytics, web-vitals, redirects, microfrontends, crons, firewall, cache-purge routes | `internal/api` | **[STUBBED]** — routes exist and return `200` with empty/zero JSON, no subsystem behind them |
+| Analytics, web-vitals, redirects, crons, firewall, cache-purge routes | `internal/api` | **[DONE]** — real traffic/bandwidth/vitals rings, cron scheduler, gateway firewall enforcement |
+| Per-user RBAC | `internal/api` (`requireProjectRole`) | **[DONE]** — per-user tokens + project_members/org_members PG roles |
+| Metrics | `internal/metrics` collector | **[DONE]** — CPU/mem samples into metrics_samples table |
 | `internal/vmmanager` (second VM lifecycle implementation) | — | **dead code, not imported, scheduled for removal** |
 
 This table exists specifically so nobody scopes a sprint against a feature

@@ -108,7 +108,19 @@ type Project struct {
 	Model           string                  `json:"model,omitempty"`       // ML model ref (gpu/batch serving)
 	GPU             string                  `json:"gpu,omitempty"`         // e.g. "nvidia-t4" or ""
 	Networks        []string                `json:"networks,omitempty"`    // per-project bridge networks
+	Autoscale       *AutoscalePolicy        `json:"autoscale,omitempty"`   // horizontal autoscaling policy
 	CreatedAt       time.Time               `json:"created_at"`
+}
+
+// AutoscalePolicy controls horizontal autoscaling for a project. The autoscaler
+// polls recent load and scales the replica pool between Min and Max.
+type AutoscalePolicy struct {
+	MinReplicas  int     `json:"min_replicas"`
+	MaxReplicas  int     `json:"max_replicas"`
+	TargetCPU    float64 `json:"target_cpu_percent"`     // scale up when avg CPU exceeds this
+	ScaleDownCPU float64 `json:"scale_down_cpu_percent"` // scale down when avg CPU below this (0 disables)
+	CooldownSec  int     `json:"cooldown_seconds"`       // min seconds between scale events
+	Enabled      bool    `json:"enabled"`
 }
 
 type Domain struct {

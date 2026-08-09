@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"porter" // embedded web/dist assets (module root)
-	fcnet "porter/internal/net"
 	"porter/internal/api"
 	"porter/internal/cache"
 	"porter/internal/config"
@@ -344,14 +343,14 @@ func runServer(args []string) int {
 // ----------------------------------------------------------------------
 type vmEngine struct {
 	rt   *rt.VMManager
-	net  *fcnet.NetManager
+	net  *netmgr.NetManager
 	subs map[string]string // projectID -> allocated /24 subnet
 }
 
 func newVMEngine(cfg rt.FCConfig, st *store.Store, hub *event.Hub) *vmEngine {
 	return &vmEngine{
 		rt:   rt.NewVMManager(cfg, st, hub),
-		net:  fcnet.NewNetManager(),
+		net:  netmgr.NewNetManager(),
 		subs: map[string]string{},
 	}
 }

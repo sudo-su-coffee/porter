@@ -23,7 +23,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"porter/internal/event"
-	netmgr "porter/internal/net"
+	netmgr "porter/internal/netmgr"
 	"porter/internal/store"
 	"porter/internal/types"
 )

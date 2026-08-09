@@ -210,9 +210,9 @@ Polish:
 
 ## Status (updated after each commit)
 
-- **Current stage:** v1.0.0-rc1 — backend feature-complete (build verified green)
-- **Last commits:** `55d3913` rolling+Redis, `eabd1c8` coverage; release-prep pending commit
-- **Build:** ✅ `go build/vet/test` green (verified 2026-08)
-- **Done:** Stages 2–12, 15; RBAC v2 + usage/bandwidth/requests, deployment checks, Redis cache
-- **Remaining:** #10 BuildKit git-build, #14 frontend rebuild, #17 networking dedup (cosmetic), release commit
+- **Current stage:** v1.0.0-rc — backend feature-complete; next-session plan in `NEXT_STEPS.md`
+- **Build:** ✅ `go build/vet/test` green (last commit `7749904`)
+- **In-progress tree (uncommitted):** networking consolidation mid-edit (see NEXT_STEPS §2 — finish: rm internal/net, build, commit)
+- **Done:** Stages 2–12, 15 + RBAC v2 + usage metering + deployment checks + Redis + git build bridge
+- **Remaining:** #14 frontend, #16 docs, #17 networking finish, #18 final verify
 - **Branch:** `main`, ahead of origin (delayed push)

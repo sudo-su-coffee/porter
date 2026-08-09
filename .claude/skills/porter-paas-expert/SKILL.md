@@ -36,8 +36,12 @@ A self-hosted PaaS, one codebase. You give it a Docker/OCI image (or `docker-com
 - Cron runner — `internal/cron` real 5-field schedule scheduler firing job microVMs. **[DONE — Stage 7a]**
 - Firewall — gateway enforces active deny rules (source IP/CIDR). **[DONE — Stage 8]**
 - Metrics collector — `internal/metrics` samples CPU/mem to metrics_samples table. **[DONE — Stage 10a]**
-- Real host-port binding — compose `parsePort` drops host port ("8080:80" keeps only 80). **[PLANNED]**
-- Remaining gaps: real host-port binding, hardening/release prep (Stage 12).
+- RBAC v2 — every route guarded by fine-grained permission codes; per-user tokens. **[DONE]**
+- Deployment checks + rolling rollout — gated promote, rollout % weight. **[DONE]**
+- Git→build→VM — real OCI build bridge (docker/buildctl → containerd). **[DONE]**
+- Redis read-through cache — optional `[cache]` on hot store reads. **[DONE]**
+- Real host-port binding — compose keeps host port but no host listener binds it. **[PLANNED]**
+- Remaining gaps (v1.0.0-rc): real host-port binding, networking dedup (`net`/`netmgr`), frontend (#14).
 
 ## PHASE NEXT — what's needed (maintainer directives + PLAN.md; mark [planned] until seen in source)
 1. **Redis wiring** [NEW]: apply `internal/cache/` optional Redis (cache, sessions, SSE fan-out, rate limits, build queue). Off by default — still works without it.

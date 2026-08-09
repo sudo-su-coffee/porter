@@ -6,14 +6,62 @@
 package netmgr
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 )
+
+// BootSpec is the per-VM network identity the runtime consumes at boot
+// (host tap device name, guest CIDR, gateway, deterministic MAC).
+type BootSpec struct {
+	MacAddress  string
+	HostDevName string // host-side tap device name
+	CIDR        string // guest IP + prefix, e.g. "10.42.1.5/24"
+	GatewayAddr string
+}
+
+// AllocateProjectSubnet returns the next /24 as a string (10.42.N.0/24).
+// It shares the single subnet counter with AllocateSubnet.
+func (n *NetManager) AllocateProjectSubnet() string {
+	ipn, err := n.AllocateSubnet()
+	if err != nil {
+		return "10.42.0.0/24"
+	}
+	return ipn.String()
+}
+
+// AllocateVMNetwork derives the boot-time network identity for one VM within
+// its project subnet and creates the host-side tap device.
+func (n *NetManager) AllocateVMNetwork(subnetCIDR string, replicaIndex int, vmID string) BootSpec {
+	var a, b, c int
+	fmt.Sscanf(subnetCIDR, "%d.%d.%d.", &a, &b, &c)
+	ip := fmt.Sprintf("%d.%d.%d.%d", a, b, c, 5+replicaIndex)
+	gw := fmt.Sprintf("%d.%d.%d.1", a, b, c)
+	mac := bootMAC(vmID)
+	tapName := "tap-" + bootShortID(vmID)
+	_ = exec.Command("ip", "tuntap", "add", tapName, "mode", "tap").Run()
+	_ = exec.Command("ip", "link", "set", tapName, "up").Run()
+	return BootSpec{MacAddress: mac, HostDevName: tapName, CIDR: ip + "/24", GatewayAddr: gw}
+}
+
+// bootMAC derives a stable MAC for the boot path (kept on the 02:FC prefix).
+func bootMAC(vmID string) string {
+	sum := md5.Sum([]byte(vmID))
+	return fmt.Sprintf("02:FC:%02X:%02X:%02X:%02X", sum[0], sum[1], sum[2], sum[3])
+}
+
+func bootShortID(vmID string) string {
+	if len(vmID) > 8 {
+		return vmID[:8]
+	}
+	return vmID
+}
 
 // NetManager allocates subnets and IPs. It is a process-local allocator; the
 // authoritative subnet per project is persisted in Postgres by the caller.

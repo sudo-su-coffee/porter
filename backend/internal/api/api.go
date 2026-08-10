@@ -660,6 +660,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// ========== Servers / Users / Export / Import / SSH ==========
 	mux.HandleFunc("GET /servers", a.auth(a.handleListServers))
 	mux.HandleFunc("POST /servers", a.auth(a.handleRegisterServer))
+	mux.HandleFunc("GET /servers/{id}", a.auth(a.handleGetServer))
+	mux.HandleFunc("POST /servers/{id}/heartbeat", a.auth(a.handleServerHeartbeat))
+	mux.HandleFunc("GET /servers/{id}/ssh", a.auth(a.handleServerSSH))
 	mux.HandleFunc("DELETE /servers/{id}", a.auth(a.handleDeleteServer))
 	mux.HandleFunc("GET /users", a.auth(a.handleListUsers))
 	mux.HandleFunc("POST /users", a.auth(a.handleCreateUser))
@@ -1058,6 +1061,9 @@ var routePerms = map[string]string{
 	"DELETE /users/{username}":  "user.delete",
 	"GET /servers":              "server.register",
 	"POST /servers":             "server.register",
+	"GET /servers/{id}":         "server.register",
+	"POST /servers/{id}/heartbeat": "server.register",
+	"GET /servers/{id}/ssh":     "server.register",
 	"DELETE /servers/{id}":      "server.remove",
 	"GET /users/me/api-keys":    "apikey.create",
 	"POST /users/me/api-keys":   "apikey.create",

@@ -55,9 +55,12 @@
 | GET | `/host/ports` | token | Mapped host→container port table |
 | GET | `/logs` | token | Daemon / audit log (`?tail=N`) |
 | GET | `/vms` | token | All VMs across all projects |
-| GET | `/servers` | token | Registered cluster hosts |
-| POST | `/servers` | token | Register a host `{ "name", "address" }` |
-| DELETE | `/servers/{id}` | token | Unregister a host |
+| GET | `/servers` | token | Registered cluster nodes (live status from heartbeats) |
+| POST | `/servers` | token | Register a node `{ "hostname", "address" }` |
+| GET | `/servers/{id}` | token | Node details (cpu/mem/os/arch/version/projects/vms/last_seen) |
+| POST | `/servers/{id}/heartbeat` | token | Node status report `{ "id", "status", "vcpus", "mem_mib", ... }` |
+| GET | `/servers/{id}/ssh` | token | SSH connection info for a node |
+| DELETE | `/servers/{id}` | token | Unregister a node |
 | GET | `/traffic` | token | All proxied traffic (ring) |
 | DELETE | `/traffic` | token | Clear traffic history |
 | GET | `/traffic/search` | token | Search traffic `?q=` |
@@ -281,6 +284,7 @@ GET /projects/p1/replicas/0/logs?tail=200
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
+| GET | `/projects/{id}/settings/framework` | token | Auto-detected framework `{ "framework", "install/build/start_command", "detected" }` |
 | GET/PATCH | `/projects/{id}/settings/general` | token | General settings |
 | GET/PUT | `/projects/{id}/settings/build` | token | Build settings |
 | GET/POST | `/projects/{id}/settings/checks` | token | Deployment checks |

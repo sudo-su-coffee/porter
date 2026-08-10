@@ -956,18 +956,47 @@ func (s *Store) DeleteUser(id string) {
 
 // --- Servers (Phase-8 scaffold) ---
 
+const serverCols = `id, hostname, COALESCE(address,''), COALESCE(status,'registered'),
+	COALESCE(vcpus,0), COALESCE(mem_mib,0), COALESCE(os,''), COALESCE(arch,''),
+	COALESCE(version,''), COALESCE(projects,0), COALESCE(vms,0), last_seen`
+
 func (s *Store) PutServer(srv *types.Server) {
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO servers (id, hostname, registered_at) VALUES ($1,$2, now())
-		ON CONFLICT (id) DO UPDATE SET hostname=EXCLUDED.hostname`,
-		srv.ID, srv.Name)
+		INSERT INTO servers (id, hostname, address, status, registered_at)
+		VALUES ($1,$2,$3,$4, now())
+		ON CONFLICT (id) DO UPDATE SET hostname=EXCLUDED.hostname, address=EXCLUDED.address, status=EXCLUDED.status`,
+		srv.ID, srv.Name, srv.Address, srv.Status)
 	if err != nil {
 		log.Printf("store: put server %s: %v", srv.ID, err)
 	}
 }
 
+// scanServer scans one row returned in serverCols order.
+func scanServer(row pgx.Row) (*types.Server, error) {
+	var srv types.Server
+	var lastSeen *time.Time
+	if err := row.Scan(&srv.ID, &srv.Name, &srv.Address, &srv.Status, &srv.VCPUs,
+		&srv.MemMiB, &srv.OS, &srv.Arch, &srv.Version, &srv.Projects, &srv.VMs, &lastSeen); err != nil {
+		return nil, err
+	}
+	if lastSeen != nil {
+		srv.LastSeen = *lastSeen
+	}
+	return &srv, nil
+}
+
+func (s *Store) GetServer(id string) (*types.Server, bool) {
+	srv, err := scanServer(s.pool.QueryRow(context.Background(),
+		`SELECT `+serverCols+` FROM servers WHERE id = $1`, id))
+	if err != nil {
+		return nil, false
+	}
+	return srv, true
+}
+
 func (s *Store) ListServers() []*types.Server {
-	rows, err := s.pool.Query(context.Background(), `SELECT id, hostname FROM servers ORDER BY registered_at`)
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT `+serverCols+` FROM servers ORDER BY registered_at`)
 	if err != nil {
 		log.Printf("store: list servers: %v", err)
 		return nil
@@ -975,13 +1004,27 @@ func (s *Store) ListServers() []*types.Server {
 	defer rows.Close()
 	out := make([]*types.Server, 0)
 	for rows.Next() {
-		var srv types.Server
-		if err := rows.Scan(&srv.ID, &srv.Name); err != nil {
+		srv, serr := scanServer(rows)
+		if serr != nil {
 			continue
 		}
-		out = append(out, &srv)
+		out = append(out, srv)
 	}
 	return out
+}
+
+// ApplyHeartbeat updates a worker node's live health fields and stamps
+// last_seen. Returns false when the node is not registered.
+func (s *Store) ApplyHeartbeat(h *types.ServerHeartbeat) bool {
+	res, err := s.pool.Exec(context.Background(), `
+		UPDATE servers SET address=$2, status=$3, vcpus=$4, mem_mib=$5,
+			os=$6, arch=$7, version=$8, projects=$9, vms=$10, last_seen=now()
+		WHERE id=$1`, h.ID, h.Address, h.Status, h.VCPUs, h.MemMiB, h.OS, h.Arch, h.Version, h.Projects, h.VMs)
+	if err != nil {
+		log.Printf("store: heartbeat %s: %v", h.ID, err)
+		return false
+	}
+	return res.RowsAffected() > 0
 }
 
 func (s *Store) DeleteServer(id string) bool {

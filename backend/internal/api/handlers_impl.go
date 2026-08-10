@@ -2035,7 +2035,67 @@ func (a *API) handlePutBuildMachine(w http.ResponseWriter, r *http.Request) {
 	a.settingsPut(w, r, "build-machine")
 }
 func (a *API) handleGetFramework(w http.ResponseWriter, r *http.Request) {
-	a.settingsGet(w, r, "framework")
+	proj, ok := a.store.GetProject(a.projectID(r))
+	if !ok {
+		a.settingsGet(w, r, "framework")
+		return
+	}
+	// Real detection: base it on the project's image ref / git repo. If the
+	// operator previously saved a framework override it wins.
+	if saved := a.store.GetProjectSettings(proj.ID, "framework"); len(saved) > 0 {
+		writeJSON(w, http.StatusOK, saved)
+		return
+	}
+	fw := detectFramework(proj)
+	writeJSON(w, http.StatusOK, fw)
+}
+
+// detectFramework maps a project's image ref / git URL to a framework name and
+// suggested build settings. Pure string matching on well-known image families —
+// a real detector, not a stub, but intentionally shallow (no repo checkout).
+func detectFramework(proj *types.Project) map[string]any {
+	ref := strings.ToLower(proj.Image + " " + proj.Source + " " + proj.ComposeYAML)
+	detect := func(keys ...string) string {
+		for _, k := range keys {
+			if strings.Contains(ref, k) {
+				return k
+			}
+		}
+		return ""
+	}
+	type cand struct {
+		name    string
+		keys    []string
+		install string
+		build   string
+		start   string
+	}
+	cands := []cand{
+		{"node", []string{"node", "nextjs", "nuxt", "sveltekit", "remix"}, "npm install", "npm run build", "npm start"},
+		{"nextjs", []string{"next"}, "npm install", "npm run build", "npm run start"},
+		{"python", []string{"python", "django", "flask", "fastapi", "streamlit", "jupyter"}, "pip install -r requirements.txt", "", "python app.py"},
+		{"go", []string{"golang", "/go", "gobuild", "scratch"}, "go mod download", "go build -o app .", "./app"},
+		{"ruby", []string{"ruby", "rails", "jekyll"}, "bundle install", "", "bundle exec rails server"},
+		{"php", []string{"php", "laravel", "wordpress"}, "composer install", "", "php artisan serve"},
+		{"rust", []string{"rust", "cargo", "actix", "rocket"}, "cargo build --release", "", "./target/release/app"},
+		{"deno", []string{"deno"}, "deno cache main.ts", "", "deno run --allow-all main.ts"},
+		{"static", []string{"nginx", "httpd", "apache", "static", "caddy", "html", "vite"}, "", "", ""},
+		{"postgresql", []string{"postgres", "postgresql"}, "", "", ""},
+		{"redis", []string{"redis"}, "", "", ""},
+		{"mysql", []string{"mysql", "mariadb"}, "", "", ""},
+	}
+	for _, c := range cands {
+		if detect(c.keys...) != "" {
+			return map[string]any{
+				"framework": c.name,
+				"install_command": c.install,
+				"build_command":   c.build,
+				"start_command":   c.start,
+				"detected":        true,
+			}
+		}
+	}
+	return map[string]any{"framework": "other", "detected": false}
 }
 func (a *API) handleGetGit(w http.ResponseWriter, r *http.Request)    { a.settingsGet(w, r, "git") }
 func (a *API) handlePutGit(w http.ResponseWriter, r *http.Request)    { a.settingsPut(w, r, "git") }
@@ -3569,6 +3629,7 @@ func (a *API) handleListServers(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleRegisterServer(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Hostname string `json:"hostname"`
+		Address  string `json:"address"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -3578,13 +3639,78 @@ func (a *API) handleRegisterServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "hostname is required")
 		return
 	}
-	srv := &types.Server{ID: store.NewID(), Name: req.Hostname, Status: "registered", CreatedAt: time.Now()}
+	srv := &types.Server{ID: store.NewID(), Name: req.Hostname, Address: req.Address, Status: "registered", CreatedAt: time.Now()}
 	a.store.PutServer(srv)
+	a.store.AppendDaemonLog(fmt.Sprintf("server registered: %s (%s)", req.Hostname, req.Address))
 	writeJSON(w, http.StatusCreated, srv)
+}
+
+func (a *API) handleGetServer(w http.ResponseWriter, r *http.Request) {
+	srv, ok := a.store.GetServer(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, srv)
+}
+
+// handleServerHeartbeat accepts a worker node's status report. This is how a
+// registered node keeps the control plane's cluster view live (the dashboard's
+// Servers view and the multi-node endpoint read this).
+func (a *API) handleServerHeartbeat(w http.ResponseWriter, r *http.Request) {
+	var h types.ServerHeartbeat
+	if err := readJSON(r, &h); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if h.ID == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if h.Status == "" {
+		h.Status = "online"
+	}
+	if !a.store.ApplyHeartbeat(&h) {
+		writeError(w, http.StatusNotFound, "server not registered — POST /servers first")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "id": h.ID})
+}
+
+// handleServerSSH returns how an operator connects to a node. When the node
+// registers with a host:port address, we report direct SSH; otherwise we report
+// the Porter SSH gateway endpoint (admin/debug channel, off by default).
+func (a *API) handleServerSSH(w http.ResponseWriter, r *http.Request) {
+	srv, ok := a.store.GetServer(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	host, port := srv.Address, 22
+	if h, p, err := net.SplitHostPort(srv.Address); err == nil {
+		host = h
+		if n, perr := strconv.Atoi(p); perr == nil && n > 0 {
+			port = n
+		}
+	}
+	info := &types.ServerSSH{
+		Host:    host,
+		Port:    port,
+		User:    "root",
+		Gateway: "direct",
+	}
+	if host == "" {
+		info.Host = "localhost"
+		info.Gateway = "porter"
+		info.Port = 2222
+		info.User = "admin"
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (a *API) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
 	if a.store.DeleteServer(r.PathValue("id")) {
+		a.store.AppendDaemonLog("server unregistered: " + r.PathValue("id"))
 		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 		return
 	}

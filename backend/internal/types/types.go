@@ -196,7 +196,39 @@ type Server struct {
 	Name      string    `json:"name"`
 	Address   string    `json:"address"`
 	Status    string    `json:"status"`
+	VCPUs     int       `json:"vcpus"`
+	MemMiB    int       `json:"mem_mib"`
+	OS        string    `json:"os,omitempty"`
+	Arch      string    `json:"arch,omitempty"`
+	Version   string    `json:"version,omitempty"`
+	Projects  int       `json:"projects"`
+	VMs       int       `json:"vms"`
+	LastSeen  time.Time `json:"last_seen,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// ServerHeartbeat carries a worker node's status report to the control plane.
+type ServerHeartbeat struct {
+	ID       string `json:"id"`
+	Address  string `json:"address"`
+	Status   string `json:"status"`
+	VCPUs    int    `json:"vcpus"`
+	MemMiB   int    `json:"mem_mib"`
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+	Version  string `json:"version"`
+	Projects int    `json:"projects"`
+	VMs      int    `json:"vms"`
+}
+
+// ServerSSH describes how an operator reaches a node over SSH (via the Porter
+// SSH gateway or direct host when reachable).
+type ServerSSH struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	User     string `json:"user"`
+	KeyName  string `json:"key_name,omitempty"`
+	Gateway  string `json:"gateway,omitempty"` // e.g. "porter" | "direct"
 }
 
 // Service is one compose service (or the synthetic service created for a

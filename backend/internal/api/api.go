@@ -1353,6 +1353,7 @@ type createProjectReq struct {
 	Ports         []types.Port       `json:"ports"`
 	Replicas      int                `json:"replicas"`
 	HostMountPath string             `json:"host_mount_path"`
+	VolumeID      string             `json:"volume_id"`
 	Healthcheck   *types.Healthcheck `json:"healthcheck"`
 	RestartPolicy string             `json:"restart_policy"`
 	SSHEnabled    bool               `json:"ssh_enabled"`
@@ -1475,6 +1476,7 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		MemMiB:       req.MemMiB,
 		Ports:        req.Ports,
 		Env:          env,
+		VolumeID:     req.VolumeID,
 		CreatedAt:    time.Now(),
 	}
 	a.applyImageManifest(vm)

@@ -3723,9 +3723,11 @@ func (a *API) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Role     string `json:"role"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		Role        string `json:"role"`
+		Email       string `json:"email"`
+		NotifyOptIn bool   `json:"notify_opt_in"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -3736,7 +3738,7 @@ func (a *API) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	salt := store.NewID()
-	u := &types.User{ID: store.NewID(), Username: req.Username, Role: req.Role, Salt: salt, PasswordHash: passwordHash(req.Password, salt), CreatedAt: time.Now()}
+	u := &types.User{ID: store.NewID(), Username: req.Username, Role: req.Role, Email: req.Email, NotifyOptIn: req.NotifyOptIn, Salt: salt, PasswordHash: passwordHash(req.Password, salt), CreatedAt: time.Now()}
 	a.store.PutUser(u)
 	writeJSON(w, http.StatusCreated, u)
 }

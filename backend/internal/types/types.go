@@ -71,6 +71,7 @@ type VM struct {
 	IPAddress    string            `json:"ip_address"`
 	Ports        []Port            `json:"ports"`
 	Env          map[string]string `json:"env,omitempty"`
+	VolumeID     string            `json:"volume_id,omitempty"` // persistent volume attached as /dev/vdb
 	Healthcheck  *Healthcheck      `json:"healthcheck,omitempty"`
 	Restart      string            `json:"restart,omitempty"`
 	Error        string            `json:"error,omitempty"`
@@ -172,6 +173,8 @@ type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
 	Role         string    `json:"role"`
+	Email        string    `json:"email,omitempty"`
+	NotifyOptIn  bool      `json:"notify_opt_in,omitempty"`
 	PasswordHash string    `json:"-"`
 	Salt         string    `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`

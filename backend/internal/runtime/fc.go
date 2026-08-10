@@ -65,6 +65,17 @@ func (c *fcClient) SetRootDrive(ctx context.Context, path string, readOnly bool)
 	}{"rootfs", path, true, readOnly})
 }
 
+// SetDataDrive attaches a secondary block device (a persistent volume's
+// data.img) as a non-root, writable drive. Firecracker exposes it as /dev/vdb.
+func (c *fcClient) SetDataDrive(ctx context.Context, driveID, path string) error {
+	return c.put(ctx, "/drives/"+driveID, struct {
+		DriveID      string `json:"drive_id"`
+		PathOnHost   string `json:"path_on_host"`
+		IsRootDevice bool   `json:"is_root_device"`
+		IsReadOnly   bool   `json:"is_read_only"`
+	}{driveID, path, false, false})
+}
+
 func (c *fcClient) SetNetworkInterface(ctx context.Context, ifaceID, mac, hostDev string) error {
 	return c.put(ctx, "/network-interfaces/"+ifaceID, struct {
 		IfaceID    string `json:"iface_id"`

@@ -332,10 +332,31 @@ func (m *VMManager) bootBare(vm *types.VM, spec netmgr.BootSpec) {
 		}{
 			{"boot-source", func() error { return fc.SetBootSource(apiCtx, kernel, bootArgs) }},
 			{"drive", func() error { return fc.SetRootDrive(apiCtx, vm.RootfsPath, false) }},
-			{"network-interface", func() error { return fc.SetNetworkInterface(apiCtx, "eth0", spec.MacAddress, spec.HostDevName) }},
-			{"machine-config", func() error { return fc.SetMachineConfig(apiCtx, vm.VCPUs, vm.MemMiB) }},
-			{"start", func() error { return fc.InstanceStart(apiCtx) }},
 		}
+		// Persistent volume attached as /dev/vdb when the VM requests one.
+		if vm.VolumeID != "" && m.store != nil {
+			if vol, ok := m.store.GetVolume(vm.VolumeID); ok && vol.Path != "" {
+				img := filepath.Join(vol.Path, "data.img")
+				steps = append(steps, struct {
+					name string
+					fn   func() error
+				}{"data-drive", func() error { return fc.SetDataDrive(apiCtx, "data", img) }})
+			}
+		}
+		steps = append(steps,
+			struct {
+				name string
+				fn   func() error
+			}{"network-interface", func() error { return fc.SetNetworkInterface(apiCtx, "eth0", spec.MacAddress, spec.HostDevName) }},
+			struct {
+				name string
+				fn   func() error
+			}{"machine-config", func() error { return fc.SetMachineConfig(apiCtx, vm.VCPUs, vm.MemMiB) }},
+			struct {
+				name string
+				fn   func() error
+			}{"start", func() error { return fc.InstanceStart(apiCtx) }},
+		)
 		for _, s := range steps {
 			if err := s.fn(); err != nil {
 				apiCancel()

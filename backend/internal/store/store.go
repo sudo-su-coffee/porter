@@ -910,18 +910,20 @@ func (s *Store) ListHealthEvents(projectID string, limit int) []*types.HealthEve
 
 func (s *Store) PutUser(u *types.User) {
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO users (id, username, role, password_hash, salt, created_at)
-		VALUES ($1,$2,$3,$4,$5, now())
+		INSERT INTO users (id, username, role, email, notify_opt_in, password_hash, salt, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7, now())
 		ON CONFLICT (username) DO UPDATE SET role=EXCLUDED.role,
+			email=EXCLUDED.email, notify_opt_in=EXCLUDED.notify_opt_in,
 			password_hash=EXCLUDED.password_hash, salt=EXCLUDED.salt`,
-		u.ID, u.Username, u.Role, u.PasswordHash, u.Salt)
+		u.ID, u.Username, u.Role, u.Email, u.NotifyOptIn, u.PasswordHash, u.Salt)
 	if err != nil {
 		log.Printf("store: put user %s: %v", u.Username, err)
 	}
 }
 
 func (s *Store) ListUsers() []*types.User {
-	rows, err := s.pool.Query(context.Background(), `SELECT id, username, role FROM users ORDER BY created_at`)
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, username, role, COALESCE(email,''), COALESCE(notify_opt_in,false) FROM users ORDER BY created_at`)
 	if err != nil {
 		log.Printf("store: list users: %v", err)
 		return nil
@@ -930,7 +932,7 @@ func (s *Store) ListUsers() []*types.User {
 	out := make([]*types.User, 0)
 	for rows.Next() {
 		var u types.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Role); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Email, &u.NotifyOptIn); err != nil {
 			continue
 		}
 		out = append(out, &u)
@@ -941,8 +943,9 @@ func (s *Store) ListUsers() []*types.User {
 func (s *Store) GetUserByUsername(username string) (*types.User, bool) {
 	var u types.User
 	if err := s.pool.QueryRow(context.Background(),
-		`SELECT id, username, role, password_hash, salt FROM users WHERE username = $1`, username).
-		Scan(&u.ID, &u.Username, &u.Role, &u.PasswordHash, &u.Salt); err != nil {
+		`SELECT id, username, role, COALESCE(email,''), COALESCE(notify_opt_in,false), password_hash, salt
+		 FROM users WHERE username = $1`, username).
+		Scan(&u.ID, &u.Username, &u.Role, &u.Email, &u.NotifyOptIn, &u.PasswordHash, &u.Salt); err != nil {
 		return nil, false
 	}
 	return &u, true
@@ -2208,14 +2211,53 @@ func (s *Store) OrgRoleForUser(orgID, username string) string {
 }
 
 // ProjectNotifyEmails returns the recipient addresses for project
-// notifications. Users don't carry an email column yet — this returns the
-// email of members when one can be resolved, else nil (the mailer falls back
-// to the configured default recipient). NOTE: per-user email + opt-in is a
-// planned follow-up (see memory: notification workflow).
+// notifications: every project member who has set an email AND opted in
+// (notify_opt_in). Falls back to org members of the project's org, then to nil
+// (the mailer then uses the configured default_to recipient).
 func (s *Store) ProjectNotifyEmails(projectID string) []string {
-	// TODO(notify): join project_members → users.email once users.email exists.
-	// For now we return nil so notification reverts to the global default_to.
-	return nil
+	if projectID == "" {
+		return nil
+	}
+	// Direct project members with an opt-in email.
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT u.email FROM project_members pm
+		JOIN users u ON u.username = pm.user_id
+		WHERE pm.project_id = $1 AND u.notify_opt_in = true AND u.email <> ''`,
+		projectID)
+	if err != nil {
+		log.Printf("store: project notify emails: %v", err)
+		return nil
+	}
+	out := emailRowList(rows)
+	if len(out) > 0 {
+		return out
+	}
+	// Fall back to org members (via the project's org).
+	rows2, err := s.pool.Query(context.Background(), `
+		SELECT u.email FROM projects p
+		JOIN org_members om ON om.org_id = p.org_id
+		JOIN users u ON u.username = om.user_id
+		WHERE p.id = $1 AND u.notify_opt_in = true AND u.email <> ''`,
+		projectID)
+	if err != nil {
+		log.Printf("store: org notify emails: %v", err)
+		return nil
+	}
+	return emailRowList(rows2)
+}
+
+// emailRowList drains a query whose single column is email.
+func emailRowList(rows pgx.Rows) []string {
+	defer rows.Close()
+	out := make([]string, 0, 8)
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil || email == "" {
+			continue
+		}
+		out = append(out, email)
+	}
+	return out
 }
 
 // ProjectRoleForUser resolves a user's role on a project through the PostgreSQL

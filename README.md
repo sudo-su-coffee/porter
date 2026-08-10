@@ -216,7 +216,7 @@ Porter's security posture is intentionally simple — read this before deploying
 **Network exposure, today**
 
 - The gateway (`internal/gateway`) terminates **HTTP only** — no TLS. Put a TLS-terminating reverse proxy or a WireGuard tunnel in front of it for anything beyond a trusted LAN, until Automatic TLS (ACME/DNS-01) ships.
-- `handleVerifyDomain` currently returns `"verified"` for any domain, unconditionally — it is a stub, not a real DNS/ownership check. Do not rely on a "verified" domain status for anything security-relevant yet.
+- `handleVerifyDomain` performs a real DNS probe — it resolves the domain's A/AAAA records and reports `"verified"` only when the name resolves (and, for subdomains, points at the platform's base domain). It is an ownership probe, not a DNS-01 challenge; do not treat a "verified" status as cryptographic proof of zone control.
 - The SSH gateway (`internal/sshgw`, off by default) is a `task.Exec` bridge into the containerd task, authenticated by a self-generated CA/cert issued per-request — not a general-purpose bastion. It has no port-forwarding or SFTP, and only reaches OCI-image (containerd-backed) VMs; treat it as an admin/debug channel.
 
 **Data at rest**

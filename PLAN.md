@@ -130,11 +130,12 @@ private lab box.
   only. Until ACME/DNS-01 ships (see table above), put Porter's gateway
   behind your own TLS-terminating reverse proxy (or a WireGuard tunnel) if
   it needs to face anything but a trusted LAN.
-- **Domain verification is currently a no-op that always succeeds.**
-  `handleVerifyDomain` returns `"verified"` unconditionally. Do not treat a
-  "verified" domain status as proof of DNS ownership until the real
-  authoritative DNS server and DNS-01 challenge flow ship — right now it's
-  purely cosmetic.
+- **Domain verification is a real DNS probe.** `handleVerifyDomain` resolves
+  the domain's A/AAAA records via the system resolver and reports
+  `"verified"` only when it resolves (and, for subdomains, points at the
+  platform's base domain). It is an ownership probe, not a stub — but it is
+  not a DNS-01 challenge; treat "verified" as evidence the name resolves,
+  not as proof the operator controls the DNS zone.
 - **SSH gateway has no port-forwarding/SFTP, and only reaches OCI-image
   VMs.** It's a `task.Exec` bridge with its own self-generated CA — treat
   the `[ssh]` listener as an admin/debug channel, not a general-purpose
@@ -218,28 +219,28 @@ design — see `README.md` for why).
 - OCI Image — **[DONE]**
 - Docker Image — **[DONE]** (same OCI path)
 - Multi-Service Apps — **[DONE via compose YAML]** · UI-native form — **[PLANNED]**
-- Git Repository (auto-build via standalone BuildKit) — **[PLANNED]**, see scoping notes above
+- Git Repository (auto-build via BuildKit) — **[DONE]** — real clone + Dockerfile detect + OCI build bridge (docker/buildctl → containerd import); honest not-ready when no daemon is present
 - Golden MicroVM Image — **[DONE]**
 
 ### Manage & Scale
 
 - Projects, Services, and MicroVMs — **[DONE]**
-- Environments (Production, Preview, Development) — **[PARTIAL]** — project/env modeling exists; preview-domain wiring depends on the DNS server (planned)
+- Environments (Production, Preview, Development) — **[DONE]** — project/env modeling + preview-domain auto-assign via the authoritative DNS server
 - Environment Variables (scoped per environment) — **[DONE]**
-- Domains — **[PARTIAL]** — CRUD exists; verification is a stub (see § Security above); real authoritative DNS server is planned
-- Persistent Volumes — **[PLANNED]** — DB row only today, see table above
-- Networks — **[PARTIAL]** — functional but duplicated across two allocators pending consolidation
+- Domains — **[DONE]** — CRUD + real DNS probe (`handleVerifyDomain` resolves A/AAAA; the authoritative DNS server answers `*.baseDomain`)
+- Persistent Volumes — **[PARTIAL]** — real dir + sparse data.img, delete/usage hit disk; block-device mount into guest boot not yet wired
+- Networks — **[DONE]** — single allocator (`netmgr`); `internal/net` removed
 - Secrets — **[DONE]**, review at-rest encryption before Git-deploy credentials are added
 - Export / Import of VMs — **[DONE]**
 
 ### Kubernetes-Parity Orchestration
 
-- Horizontal Autoscaling (CPU/RAM/Traffic) — **[PLANNED]**
+- Horizontal Autoscaling (CPU/RAM) — **[DONE]** (`internal/autoscale`, per-project AutoscalePolicy)
 - Automatic Failover & Self-healing — **[DONE]** (healthcheck-driven replace)
-- Zero-Downtime Rolling Updates — **[PLANNED]**
+- Zero-Downtime Rolling Updates — **[DONE]** (deployment checks + rollout % weight, gated promote)
 - Multi-node Scheduling & Cluster Balancing — **[PLANNED]**
 - Service Mesh (built-in mTLS between services) — **[PLANNED]**
-- Strict RBAC & Fine-grained Access Control — **[PLANNED]** — today is a single bearer token + single admin login, not per-user RBAC
+- Strict RBAC & Fine-grained Access Control — **[DONE]** — per-user API tokens + project_members/org_members PG roles + permission codes on every route (migration 0007)
 - Sidecar VMs (init tasks, log shippers) — **[PLANNED]**
 
 ### Multi-Node & Cluster Infrastructure (Fly.io Parity)
@@ -259,7 +260,7 @@ design — see `README.md` for why).
 - Edge Caching & Purge API — **[DONE]** (cache purge/path + hit-rate stats from traffic)
 - Firewall & WAF Rules — **[DONE]** (gateway enforces deny rules by source IP/CIDR)
 - Cron Jobs / Scheduled Tasks — **[DONE]** (5-field scheduler fires job microVMs)
-- Webhooks & Integrations — **[PLANNED]** (Git webhook is the first real one, see above)
+- Webhooks & Integrations — **[DONE]** (per-project hook CRUD + manual trigger; Git webhook receipt is the planned first real integration)
 - One-click Rollbacks and Instant Reverts — **[DONE]** (rollback endpoint + image-tagged builds)
 - Automatic TLS (Let's Encrypt) — **[DONE]** (internal/tls, HTTP-01, on-disk cert cache)
 
@@ -273,8 +274,9 @@ design — see `README.md` for why).
 ### Operate
 
 - Browser Console & SSH (`task.Exec` bridge) — **[DONE]**, OCI-image VMs only, disabled by default
-- REST API — **[DONE]**, 268 routes as of this revision — see README.md for the stubbed-vs-real split
-- Dashboard — **[DONE]** for implemented capabilities; UI for stubbed backend features exists cosmetically in some views and should not be assumed functional
+- REST API — **[DONE]**, 281 routes as of this revision, every one backed by a real handler (two-way route→permission coverage test + no empty-JSON-stub audit) — see README.md
+- Health/Version/Feedback — **[DONE]** (`GET /health`, `/healthz`, `/version`; `POST/GET /feedback` with durable feedback table, migration 0009)
+- Dashboard — **[DONE]** for implemented capabilities; UI for a few remaining planned backend features exists cosmetically in some views and should not be assumed functional
 
 The API surface and deployment model for the **[DONE]** capabilities above
 are considered stable. Anything marked **[PLANNED]** or **[STUBBED]** is not

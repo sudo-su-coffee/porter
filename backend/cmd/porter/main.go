@@ -40,7 +40,7 @@ import (
 )
 
 // Version is overridden at build time with -ldflags "-X main.Version=..."
-var Version = "v0.1.0-beta-dev"
+var Version = "v1.0.0-beta"
 
 func main() {
 	for _, arg := range os.Args[1:] {

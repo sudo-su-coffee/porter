@@ -210,10 +210,9 @@ Polish:
 
 ## Status (updated after each commit)
 
-- **Current stage:** v1.0.0-rc — backend feature-complete; next-session plan in `NEXT_STEPS.md`
-- **Build:** ✅ `go build/vet/test` green (last commit `7749904`)
-- **In-progress tree (uncommitted):** networking consolidation mid-edit (see NEXT_STEPS §2 — finish: rm internal/net, build, commit)
-- **Done:** Stages 2–12, 15 + RBAC v2 + usage metering + deployment checks + Redis + git build bridge
-- **Remaining:** #14 frontend, #16 docs, #17 networking finish, #18 final verify
-- **Host-port binding (v1 gap):** **[DONE]** — `internal/gateway` `PortForwarder` binds compose HostPorts → VM container port; gateway `targetAddress` fixed to use container port (not HostPort) for the upstream connection.
+- **Current stage:** **v1.0.0** — backend complete & green. Commits `2bf52bd`, `e6d7d04`, `c3ee539` + prior work.
+- **Build:** ✅ `go build/vet/test` green (281 routes, no empty-JSON stubs)
+- **Working tree:** clean, all uncommitted sprint work committed
+- **Done (backend):** Stages 2–12, 15 + RBAC v2 + usage metering + deployment checks + Redis + git build bridge + SMTP notify + host-port forwarder + health/version/feedback APIs + multi-node server details/heartbeat/SSH + real framework detection
+- **Remaining:** #14 frontend (paused — user wants backend-first; API doc `api.md` written for the dashboard build), #16 release docs (honest status now in PLAN/README)
 - **Branch:** `main`, ahead of origin (delayed push)

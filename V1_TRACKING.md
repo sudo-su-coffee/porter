@@ -215,4 +215,5 @@ Polish:
 - **In-progress tree (uncommitted):** networking consolidation mid-edit (see NEXT_STEPS §2 — finish: rm internal/net, build, commit)
 - **Done:** Stages 2–12, 15 + RBAC v2 + usage metering + deployment checks + Redis + git build bridge
 - **Remaining:** #14 frontend, #16 docs, #17 networking finish, #18 final verify
+- **Host-port binding (v1 gap):** **[DONE]** — `internal/gateway` `PortForwarder` binds compose HostPorts → VM container port; gateway `targetAddress` fixed to use container port (not HostPort) for the upstream connection.
 - **Branch:** `main`, ahead of origin (delayed push)

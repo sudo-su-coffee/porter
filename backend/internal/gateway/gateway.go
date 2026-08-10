@@ -308,17 +308,16 @@ func (c *countingReader) Read(p []byte) (int, error) {
 func (c *countingReader) Close() error { return c.r.Close() }
 
 // targetAddress builds the upstream URL for a VM from its IP and the first
-// mapped (host) port. Host port defaults to the container port.
+// container port (the port the app listens on *inside* the VM). HostPort is
+// the host-facing binding handled by the PortForwarder; it is never used as
+// the gateway's upstream port.
 func targetAddress(vm *types.VM) (*url.URL, bool) {
 	if vm.IPAddress == "" {
 		return nil, false
 	}
 	port := 80
-	if len(vm.Ports) > 0 {
-		port = vm.Ports[0].HostPort
-		if port == 0 {
-			port = vm.Ports[0].ContainerPort
-		}
+	if len(vm.Ports) > 0 && vm.Ports[0].ContainerPort != 0 {
+		port = vm.Ports[0].ContainerPort
 	}
 	return &url.URL{Scheme: "http", Host: vm.IPAddress + ":" + itoa(port)}, true
 }

@@ -21,8 +21,9 @@ Backend is **feature-complete for v1.0.0-rc**. 40 tables across 5 migrations,
 
 ### Task list state
 **COMPLETED (14/18):** #8 RBAC CRUD, #9 route coverage, #10 git build bridge,
-#11 rolling checks, #12 error audit, #13 migrations verified, #15 Redis cache.
-**REMAINING:** #14 Frontend (big), #16 release docs, #17 networking dedup,
+#11 rolling checks, #12 error audit, #13 migrations verified, #15 Redis cache,
+plus uncommitted: SMTP notify mailer + host-port forwarder + health/version/feedback APIs.
+**REMAINING:** #14 Frontend (big, paused — user wants backend-first), #16 release docs,
 #18 completion verify.
 
 ## 2. WORK IN PROGRESS (not committed — finish FIRST)

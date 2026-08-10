@@ -79,6 +79,17 @@ type VM struct {
 	StartedAt    *time.Time        `json:"started_at,omitempty"`
 }
 
+// ContainerPort returns the first declared container port (the port the app
+// listens on inside the VM), or 0 when none is declared.
+func (v *VM) ContainerPort() int {
+	for _, p := range v.Ports {
+		if p.ContainerPort != 0 {
+			return p.ContainerPort
+		}
+	}
+	return 0
+}
+
 type ServicePool struct {
 	Desired int      `json:"desired"`
 	Healthy int      `json:"healthy"`
@@ -339,6 +350,17 @@ type Alert struct {
 	Op        string    `json:"op"`
 	CooldownS int       `json:"cooldown_s"`
 	Silenced  bool      `json:"silenced"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Feedback is a user feedback submission (dashboard "Send feedback" form).
+type Feedback struct {
+	ID        string    `json:"id"`
+	Subject   string    `json:"subject,omitempty"`
+	Message   string    `json:"message"`
+	Category  string    `json:"category,omitempty"`
+	Username  string    `json:"username,omitempty"`
+	ProjectID string    `json:"project_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

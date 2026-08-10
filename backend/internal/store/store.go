@@ -1226,6 +1226,56 @@ func (s *Store) TailDaemonLogs(n int) []string {
 	return append([]string(nil), s.daemonLogs[len(s.daemonLogs)-n:]...)
 }
 
+// Ping verifies the PostgreSQL connection is alive (used by /healthz).
+func (s *Store) Ping(ctx context.Context) error {
+	if s.pool == nil {
+		return fmt.Errorf("database pool not initialized")
+	}
+	return s.pool.Ping(ctx)
+}
+
+// PutFeedback persists a user feedback submission.
+func (s *Store) PutFeedback(f *types.Feedback) {
+	if s.pool == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO feedback (id, subject, message, category, username, project_id)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		f.ID, f.Subject, f.Message, f.Category, f.Username, f.ProjectID)
+}
+
+// ListFeedback returns recent feedback submissions, newest first (limit bound).
+func (s *Store) ListFeedback(limit int) []*types.Feedback {
+	if s.pool == nil {
+		return nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, subject, message, category, username, project_id, created_at
+		FROM feedback ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		log.Printf("store: list feedback: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.Feedback, 0, 16)
+	for rows.Next() {
+		var f types.Feedback
+		if err := rows.Scan(&f.ID, &f.Subject, &f.Message, &f.Category, &f.Username, &f.ProjectID, &f.CreatedAt); err != nil {
+			continue
+		}
+		out = append(out, &f)
+	}
+	return out
+}
+
 func statusFromProject(p *types.Project) string {
 	switch {
 	case len(p.VMIDs) == 0:
@@ -2112,6 +2162,17 @@ func (s *Store) OrgRoleForUser(orgID, username string) string {
 		return ""
 	}
 	return role
+}
+
+// ProjectNotifyEmails returns the recipient addresses for project
+// notifications. Users don't carry an email column yet — this returns the
+// email of members when one can be resolved, else nil (the mailer falls back
+// to the configured default recipient). NOTE: per-user email + opt-in is a
+// planned follow-up (see memory: notification workflow).
+func (s *Store) ProjectNotifyEmails(projectID string) []string {
+	// TODO(notify): join project_members → users.email once users.email exists.
+	// For now we return nil so notification reverts to the global default_to.
+	return nil
 }
 
 // ProjectRoleForUser resolves a user's role on a project through the PostgreSQL

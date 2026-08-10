@@ -27,6 +27,7 @@ import (
 	"porter/internal/health"
 	"porter/internal/imagecatalog"
 	"porter/internal/netmgr"
+	"porter/internal/notify"
 	rt "porter/internal/runtime"
 	"porter/internal/sshgw"
 	"porter/internal/startup"
@@ -159,6 +160,14 @@ func runServer(args []string) int {
 	_ = volMgr.EnsureRoot()
 	a.SetVolumesManager(volMgr)
 
+	// SMTP email notifications for alerts/events ([notify] config).
+	a.SetMailer(notify.New(notify.SMTPConfig{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort,
+		User: cfg.SMTPUser, Password: cfg.SMTPPassword,
+		From: cfg.SMTPFrom, DefaultTo: cfg.NotifyDefaultTo,
+		Enabled: cfg.NotifyEnabled,
+	}))
+
 	// Cron scheduler: fires active crons on their 5-field schedule by booting
 	// short-lived job microVMs through the same runtime as deploys.
 	cronRunner := cronrunner.NewRunner(st, vmm, 30*time.Second)
@@ -194,6 +203,16 @@ func runServer(args []string) int {
 				log.Fatalf("gateway server error: %v", err)
 			}
 		}()
+	}
+
+	// Host-port forwarder: binds declared HostPorts (compose "8080:80") on the
+	// host and proxies them to the running VM's container port. Independent of
+	// the HTTP gateway — raw TCP forwarding for non-HTTP/protocol workloads.
+	if cfg.GatewayEnabled {
+		pf := gateway.NewPortForwarder(st)
+		pf.Start()
+		defer pf.Close()
+		log.Printf("portforward: host-port forwarder started (binds compose HostPorts)")
 	}
 
 	// DNS server: authoritative resolver for *.baseDomain zones.

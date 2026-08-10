@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"porter/internal/dns"
 	"porter/internal/event"
 	"porter/internal/netmgr"
+	"porter/internal/notify"
 	"porter/internal/store"
 	"porter/internal/types"
 	"porter/internal/volumes"
@@ -78,6 +80,9 @@ type API struct {
 	// volMgr manages real persistent volume directories on the host.
 	volMgr *volumes.Manager
 
+	// mailer sends SMTP email for alerts/events (nil = notifications off).
+	mailer *notify.Mailer
+
 	// CSRF secret – must be set before routes are registered.
 	csrfToken string
 
@@ -133,6 +138,9 @@ func (a *API) SetDomainManager(dm *dns.DomainManager) { a.domainMgr = dm }
 
 // SetVolumesManager configures the real persistent-volume manager.
 func (a *API) SetVolumesManager(vm *volumes.Manager) { a.volMgr = vm }
+
+// SetMailer configures SMTP email notifications (nil disables).
+func (a *API) SetMailer(m *notify.Mailer) { a.mailer = m }
 
 // StartAutoscaler runs the horizontal autoscaler in the background for
 // projects with an AutoscalePolicy. interval is the load-poll cadence.
@@ -240,6 +248,79 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": a.version})
 }
 
+// handleHealthz is the deeper readiness endpoint: checks the database is
+// reachable and reports the control-plane version. 503 when the DB is down.
+func (a *API) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := a.store.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "unavailable", "version": a.version, "db": "down", "detail": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "version": a.version, "db": "up",
+		"auth": "bearer",
+	})
+}
+
+// handleVersion reports the control-plane version and runtime identity. It is
+// unauthenticated so installers/ops can fingerprint a running binary easily.
+func (a *API) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version":    a.version,
+		"name":       "porter",
+		"engine":     "firecracker",
+		"storage":    "postgresql",
+		"api_prefix": "",
+	})
+}
+
+// handleFeedback accepts a user feedback submission and persists it.
+func (a *API) handleFeedback(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Subject   string `json:"subject"`
+		Message   string `json:"message"`
+		Category  string `json:"category"`
+		ProjectID string `json:"project_id"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		writeError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	if req.Category == "" {
+		req.Category = "general"
+	}
+	f := &types.Feedback{
+		ID:        store.NewID(),
+		Subject:   req.Subject,
+		Message:   req.Message,
+		Category:  req.Category,
+		Username:  a.userIDFromHeader(r),
+		ProjectID: req.ProjectID,
+		CreatedAt: time.Now(),
+	}
+	a.store.PutFeedback(f)
+	a.store.AppendDaemonLog(fmt.Sprintf("feedback %s from %s: %s", req.Category, f.Username, req.Message))
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "received", "id": f.ID})
+}
+
+// handleListFeedback returns recent feedback submissions (operator view).
+func (a *API) handleListFeedback(w http.ResponseWriter, r *http.Request) {
+	n := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			n = parsed
+		}
+	}
+	writeJSON(w, http.StatusOK, a.store.ListFeedback(n))
+}
+
 // orgIDFromHeader returns the org ID from the X-Porter-Org-Id header, or the first org as fallback.
 func (a *API) orgIDFromHeader(r *http.Request) string {
 	if orgID := r.Header.Get(HeaderOrgID); orgID != "" {
@@ -265,8 +346,12 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// ========== CSRF ==========
 	mux.HandleFunc("GET /csrf", a.auth(a.handleCSRFToken))
 
-	// ========== Health ==========
+	// ========== Health / Version / Feedback ==========
 	mux.HandleFunc("GET /health", a.handleHealth)
+	mux.HandleFunc("GET /healthz", a.handleHealthz)
+	mux.HandleFunc("GET /version", a.handleVersion)
+	mux.HandleFunc("POST /feedback", a.auth(a.handleFeedback))
+	mux.HandleFunc("GET /feedback", a.auth(a.handleListFeedback))
 
 	// ========== Auth & Users ==========
 	mux.HandleFunc("POST /auth/login", a.handleLogin)
@@ -988,6 +1073,9 @@ var routePerms = map[string]string{
 	"PUT /roles/{roleId}/permissions":       "org.member.role",
 	"POST /roles/{roleId}/permissions/{permissionId}": "org.member.role",
 	"DELETE /roles/{roleId}/permissions/{permissionId}": "org.member.role",
+	// feedback (auth-gated; authenticated users can always submit/read)
+	"POST /feedback": "feedback.write",
+	"GET /feedback":  "feedback.read",
 }
 
 // bearerToken, constantTimeEqual unchanged...

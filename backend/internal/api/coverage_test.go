@@ -71,7 +71,8 @@ func TestEveryRegisteredRouteIsMapped(t *testing.T) {
 // isUnGuarded lists patterns that intentionally need no permission guard.
 func isUnGuarded(p string) bool {
 	prefixes := []string{
-		"GET /csrf", "GET /health", "POST /auth/", "GET /auth/session",
+		"GET /csrf", "GET /health", "GET /healthz", "GET /version",
+		"POST /auth/", "GET /auth/session",
 		"POST /login", "POST /logout",
 		"GET /users/me", "PATCH /users/me", "DELETE /users/me",
 		"POST /images/custom", "GET /images/ml",

@@ -168,3 +168,33 @@ url = "redis://localhost:6379/0"
 # ttl_seconds — how long cached reads stay fresh before falling through to PG.
 ttl_seconds = 15
 #   Override: PORTER_CACHE_TTL_SECONDS
+
+# ---------------------------------------------------------------------------
+[notify]
+# enabled — SMTP email notifications for alerts and operational events.
+# When false (default) the mailer is a harmless no-op; the API still works.
+enabled = false
+#   Override: PORTER_NOTIFY_ENABLED
+
+# smtp_host — SMTP relay hostname (e.g. smtp.example.com).
+# smtp_host = "smtp.example.com"
+#   Override: PORTER_SMTP_HOST
+
+# smtp_port — SMTP port (587 is the common submission port).
+# smtp_port = 587
+#   Override: PORTER_SMTP_PORT
+
+# smtp_user / smtp_password — SMTP AUTH credentials (may be empty for relays
+# that accept open submission).
+# smtp_user = ""
+# smtp_password = ""
+#   Override: PORTER_SMTP_USER / PORTER_SMTP_PASSWORD
+
+# from — envelope From address for outgoing alert mail.
+# from = "porter@example.com"
+#   Override: PORTER_SMTP_FROM
+
+# default_to — fallback recipient when an alert has no explicit destination
+# (per-user email + opt-in is a planned follow-up).
+# default_to = "ops@example.com"
+#   Override: PORTER_NOTIFY_DEFAULT_TO

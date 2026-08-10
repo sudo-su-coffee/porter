@@ -2479,7 +2479,22 @@ func (a *API) handleCreateAlert(w http.ResponseWriter, r *http.Request) {
 	}
 	al := &types.Alert{ID: store.NewID(), ProjectID: a.projectID(r), Name: req.Name, Metric: req.Metric, Threshold: req.Threshold, Op: req.Op, CooldownS: req.CooldownS, CreatedAt: time.Now()}
 	a.store.PutAlert(al)
+	a.notifyProject(a.projectID(r), fmt.Sprintf("Alert created: %s (%s %v)", req.Name, req.Op, req.Threshold), "Metric-based alert registered for project "+a.projectID(r))
 	writeJSON(w, http.StatusCreated, al)
+}
+
+// notifyProject sends an out-of-band email when notifications are enabled.
+// It never blocks the request or fails it — errors are logged only.
+func (a *API) notifyProject(projectID, subject, body string) {
+	if a.mailer == nil {
+		return
+	}
+	to := a.store.ProjectNotifyEmails(projectID)
+	go func() {
+		if err := a.mailer.Send(to, subject, "Project "+projectID+"\n\n"+body); err != nil {
+			a.logger.Printf("notify: %v", err)
+		}
+	}()
 }
 
 func (a *API) handleGetAlert(w http.ResponseWriter, r *http.Request) {

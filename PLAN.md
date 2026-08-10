@@ -86,7 +86,7 @@ and optional volumes. Porter is that model, self-hosted:
 | Authoritative DNS server for preview/production domains | `internal/dns/server.go` | **[DONE]** — UDP/TCP authoritative server (miekg/dns) for `*.baseDomain` |
 | Automatic TLS via ACME | `internal/tls/autocert.go` | **[DONE]** — Let's Encrypt with on-disk cache + HTTP-01 |
 | Persistent volumes (real device) | `internal/volumes` | **[DONE]** — real dir + sparse data.img; delete/usage hit disk (block-device mount not yet wired into VM boot) |
-| Real host-reachable port mapping | `internal/gateway`, `types.Port.HostPort` | **[PLANNED]** — field exists, nothing binds it; compose parser also currently drops the host-side port (tracked bug, see README) |
+| Real host-reachable port mapping | `internal/gateway` (portforward) + `types.Port.HostPort` | **[DONE]** — `PortForwarder` binds declared HostPorts (compose `"8080:80"`) and proxies TCP to the running VM's container port; compose parser keeps the host-side port |
 | Git repository deploy (clone → Dockerfile → build → boot) | `internal/api` git build handlers | **[DONE]** — real clone + Dockerfile detect + OCI build bridge (docker/buildctl → containerd import), honest not-ready without a daemon |
 | SSH access via containerd `task.Exec` | `internal/sshgw` | **[DONE, OCI-image VMs only]** — disabled by default |
 | Network allocation | `internal/net` (active) + `internal/netmgr` (unused, cosmetic) | **[DONE, but duplicated — consolidation planned]** |

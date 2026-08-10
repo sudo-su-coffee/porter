@@ -132,7 +132,9 @@ INSERT INTO permissions (id, name) VALUES
     ('server.register',      'Register a server'),
     ('server.remove',        'Remove a server'),
     ('apikey.create',        'Create API key'),
-    ('apikey.delete',        'Delete API key')
+    ('apikey.delete',        'Delete API key'),
+    ('feedback.write',       'Submit feedback'),
+    ('feedback.read',        'Read feedback')
 ON CONFLICT (id) DO NOTHING;
 
 -- Map roles → permissions. The source of truth for what each role may do;
@@ -179,6 +181,7 @@ FROM (VALUES
     ('member', 'cache.purge'), ('member', 'cache.stats'),
     ('member', 'volume.create'), ('member', 'volume.resize'), ('member', 'volume.delete'), ('member', 'volume.read'),
     ('member', 'member.list'),
+    ('member', 'feedback.write'),
     -- admin: member plus org/user/host management and role changes
     ('admin', 'project.list'), ('admin', 'project.read'),
     ('admin', 'project.create'), ('admin', 'project.rename'),
@@ -216,6 +219,7 @@ FROM (VALUES
     ('admin', 'user.create'), ('admin', 'user.delete'),
     ('admin', 'server.register'), ('admin', 'server.remove'),
     ('admin', 'apikey.create'), ('admin', 'apikey.delete'),
+    ('admin', 'feedback.write'), ('admin', 'feedback.read'),
     -- owner: everything including project deletion and transfer
     ('owner', 'project.list'), ('owner', 'project.read'),
     ('owner', 'project.create'), ('owner', 'project.rename'),
@@ -252,7 +256,8 @@ FROM (VALUES
     ('owner', 'group.create'), ('owner', 'group.update'), ('owner', 'group.delete'),
     ('owner', 'user.create'), ('owner', 'user.delete'),
     ('owner', 'server.register'), ('owner', 'server.remove'),
-    ('owner', 'apikey.create'), ('owner', 'apikey.delete')
+    ('owner', 'apikey.create'), ('owner', 'apikey.delete'),
+    ('owner', 'feedback.write'), ('owner', 'feedback.read')
 ) AS v(role_id, permission_id)
 WHERE NOT EXISTS (
     SELECT 1 FROM role_permissions rp WHERE rp.role_id = v.role_id AND rp.permission_id = v.permission_id

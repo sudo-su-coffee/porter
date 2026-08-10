@@ -57,7 +57,7 @@ Porter brings the pieces of Fargate, Kubernetes, and Fly.io that actually matter
 
 **No CLI, by design.** Porter is UI-first and UI-only: deploying, scaling, starting/stopping the daemon, and every other operation happen through the dashboard or the REST API it calls — there is no `porter up`/`porter ssh`/`porter scale` command line planned. `cmd/porter` stays a minimal binary entrypoint (the HTTP server itself, plus `porter kernel set` and `porter version` as host-provisioning utilities only).
 
-**Not yet shipped** (see [Planned / In Progress](#-planned--in-progress)): the UI-native multi-service form (compose import is currently the only way to define multi-service apps), wildcard/preview domains, real host-reachable port mapping, real persistent volumes, TLS/ACME, and Git-based deploy.
+**Not yet shipped** (see [Planned / In Progress](#-planned--in-progress)): the UI-native multi-service form (compose import is currently the only way to define multi-service apps), wildcard/preview domains, real persistent volumes mounted into the guest, and multi-node clustering. Host-reachable port mapping, TLS/ACME, and Git-based deploy are shipped.
 
 **Not** a Docker-in-VM system, **not** a full multi-host Kubernetes replacement, and **not** multi-tenant (see [OSS & Future SaaS Strategy](#-oss--future-saas-strategy) for why that last one is permanent, not a v1 limitation).
 
@@ -233,18 +233,15 @@ Porter's security posture is intentionally simple — read this before deploying
 
 ## ✅ Planned / In Progress
 
-Everything in this section is scoped and being actively worked on, but **is not yet in the code** — treat any claim elsewhere in this README about these topics as the target, not the current state. Status tags matching [`PLAN.md`](./PLAN.md) are included for quick cross-reference.
+Everything in this section is scoped and being actively worked on, but **is not yet in the code** — treat any claim elsewhere in this README about these topics as the target, not the current state. Status tags matching [`PLAN.md`](./PLAN.md) are included for quick cross-reference. Several items once listed here have shipped and moved to the API/source tables above.
 
-- **Real host-reachable port mapping.** `types.Port.HostPort` exists and the gateway reads it, but nothing binds a listener or DNAT rule on the actual host, and the compose parser currently drops the host-side port from `"8080:80"` entries (only the container port is kept). Domain-based routing (below) is the intended replacement for host-port exposure, not a fix to the port path itself. **[PLANNED]**
-- **Preview & production domains + a real authoritative DNS server.** `internal/dns` today is an in-process `.local` resolver only, not a server that answers real DNS queries. The plan is a wire-level authoritative DNS server (own package, `miekg/dns`-based) for `*.porter.<base_domain>`, with auto-generated preview domains per deploy and a promote-to-production flow. **[PLANNED]**
-- **TLS via ACME (Let's Encrypt, DNS-01).** Depends on the DNS server above being able to self-answer the `TXT` challenge. `handleVerifyDomain` today always reports a domain as `"verified"` regardless of actual DNS state — that's a stub, not a real check (see Security & Trust Model above). **[PLANNED]**
-- **Git/GitHub repository deploy with Dockerfile builds.** A new build pipeline: clone → detect `Dockerfile` → build via a standalone BuildKit daemon (no Docker daemon, keeping the existing "pure Go, no Docker" stance) → push into the local containerd content store → boot through the existing, working `internal/runtime` path. Full scoping notes, dependency list, and failure-handling requirements are in [`PLAN.md`](./PLAN.md#git-to-vm-pipeline--scoping-notes). **[PLANNED]**
+**Shipped since this list was written:** real host-reachable port mapping (gateway `PortForwarder` binds compose `HostPort` → VM container port), a wire-level authoritative DNS server (`internal/dns/server.go`, `miekg/dns`), automatic TLS via ACME (`internal/tls/autocert.go`), Git-repo deploy with real OCI build bridge (`docker/buildctl` → containerd import), networking consolidation (`internal/net` removed; `netmgr` is the single allocator), removal of dead `internal/vmmanager`, per-user RBAC (per-user API tokens + `project_members`/`org_members` PG roles + fine-grained permission codes on every route), and a startup sanity check that fails loudly on misconfigured shim/jailer paths.
+
+Remaining on this list:
+
 - **A UI-native way to define multi-service apps.** Right now the *only* way to define a multi-service app is `POST /projects/compose` with a full `docker-compose.yml`. The intended primary path is dashboard forms — add a service, set its image/replicas/ports/env/`depends_on` directly in the UI, no YAML file to hand-write — with compose import kept as a convenience for bringing in an existing file, not the main interface. This is a real gap today, not just a framing preference: there's no form-driven way yet to build up a multi-service project piece by piece in the dashboard. **[PLANNED]**
-- **Real persistent volumes.** `POST /volumes` today only writes a database row — there is no field on the VM type to reference a volume, and nothing creates, attaches, or mounts a real block device at boot. **[PLANNED]**
-- **Networking consolidation.** `internal/net` and `internal/netmgr` are two independent subnet/IP allocators currently running side by side; this will be collapsed into one. **[PLANNED]**
-- **Removal of `internal/vmmanager`.** Confirmed dead code (not imported anywhere) — a leftover second implementation of what `internal/runtime` already does. **[cleanup, not a feature]**
-- **Per-user RBAC.** Today's auth model is a single bearer token + single admin account (see Security & Trust Model). Fine-grained access control is a v1.0.0 roadmap target but not yet started. **[PLANNED]**
-- **Startup sanity check for jailer/shim configuration.** Currently a misconfigured `aws.firecracker` shim or jailer only surfaces as a failure on first VM boot. A startup-time check that fails loudly earlier is planned. **[PLANNED]**
+- **Real persistent volumes mounted into the guest.** `POST /volumes` creates a real host dir + sparse `data.img` and delete/usage hit disk, but the block-device mount is not yet wired into VM boot (the `internal/volumes` path ends at the data file, not an attached drive). **[PARTIAL]**
+- **Per-project email notifications for alerts.** The `[notify]` SMTP mailer ships (alerts fire out-of-band email when configured), but per-user email + opt-in resolution is a planned follow-up (`store.ProjectNotifyEmails` currently falls back to the configured default recipient). **[PARTIAL]**
 
 If you're reading the code and something looks unfinished, check this list first — it's kept in sync with what's actually been verified against the source, not just filed as a wish.
 
@@ -255,9 +252,16 @@ If you're reading the code and something looks unfinished, check this list first
 - Base URL: `http://<host>:8080`
 - Auth: `Authorization: Bearer <PORTER_API_TOKEN>` on every route except `GET /health`, `GET /csrf`, and the auth endpoints themselves.
 - All input/output is JSON. Errors are `{ "error": "..." }`.
-- Routes are registered in `backend/internal/api/api.go` on Go's `net/http` `ServeMux`; handler bodies live in `backend/internal/api/handlers_impl.go`. There are **268 registered routes** as of this revision — far more than the v0.1.0-beta scope in `PLAN.md` describes. Read the source for the authoritative list; the groups below are the ones worth knowing as a new contributor.
+- Routes are registered in `backend/internal/api/api.go` on Go's `net/http` `ServeMux`; handler bodies live in `backend/internal/api/handlers_impl.go`. There are **277 registered routes** as of this revision — far more than the v0.1.0-beta scope in `PLAN.md` describes. Read the source for the authoritative list; the groups below are the ones worth knowing as a new contributor.
 
-> **Not every route is backed by real logic.** A meaningful chunk of the surface — analytics (`/projects/{id}/analytics/*`), web-vitals, redirects, microfrontends, crons, firewall, cache-purge, and similar Vercel-parity routes — currently return hardcoded empty/zero JSON rather than being backed by a real subsystem. They don't error, but they don't do anything either. If you're building against this API, verify against the handler source before relying on one of these returning real data.
+> **Route reality:** as of this revision every registered route has a real
+> handler (verified by the two-way coverage test in `api/coverage_test.go` and
+> an audit for empty-JSON stubs). Analytics/usage endpoints aggregate the real
+> traffic ring; web-vitals ingest real beacon data; firewall rules are enforced
+> by the gateway; crons fire real job microVMs; cache-purge paths work. Some
+> routes (e.g. `POST /auth/signup`) intentionally return a single-tenant notice
+> rather than creating a multi-tenant account — that is the designed behavior,
+> not a stub. When in doubt, read the handler source.
 
 ### Core routes that are genuinely implemented
 
@@ -316,9 +320,15 @@ If you're reading the code and something looks unfinished, check this list first
 
 `depends_on` is resolved by a DFS topological sort (declaration order used as the tiebreak; each service's deps sorted for determinism). Services boot in topo order; a circular or unknown dependency halts parsing.
 
-### ⚠️ Known bug: `ports:` only keeps the container-side port
+### ✅ Host ports: `ports:` mapping is honored
 
-`parsePort` currently takes the **last** `:`-separated segment of a ports entry as the container port and discards everything before it. That means `"8080:80"` is parsed as container port `80` only — the host-side `8080` is silently dropped, even though `types.Port.HostPort` exists as a field for exactly this. The one existing test for this (`TestParseComposeBasic`) uses `"3000:3000"`, where host and container ports happen to match, which is why the bug wasn't caught. This is tracked in [Planned / In Progress](#-planned--in-progress) alongside the broader move to domain-based routing instead of host-port exposure.
+`parsePort` keeps both sides of a ports entry — `"8080:80"` parses to
+`types.Port{HostPort: 8080, ContainerPort: 80}`. When the gateway is enabled,
+a `PortForwarder` (`internal/gateway/portforward.go`) binds each running VM's
+declared `HostPort` on the host and proxies TCP connections to the VM's
+container port — so a compose `ports: ["8080:80"]` gets a real host listener.
+The HTTP gateway upstream always targets the VM's **container** port (the port
+the app listens on inside the microVM), never `HostPort`.
 
 ### Current parse constraints worth knowing
 

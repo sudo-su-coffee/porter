@@ -80,6 +80,15 @@ type Config struct {
 	// and adjusts replica pools per each project's AutoscalePolicy).
 	AutoscaleEnabled bool
 
+	// SMTP email notifications ([notify]) for alerts and operational events.
+	NotifyEnabled   bool   // master switch; when false Send is a no-op
+	SMTPHost        string // e.g. smtp.example.com
+	SMTPPort        int    // e.g. 587
+	SMTPUser        string
+	SMTPPassword    string
+	SMTPFrom        string // From address
+	NotifyDefaultTo string // recipients when an alert has no destination
+
 	AdminUsername string
 	AdminPassword string
 }
@@ -105,6 +114,7 @@ func LoadConfig(path string) (*Config, error) {
 		CacheURL:          "redis://localhost:6379/0",
 		CacheTTLSeconds:   15,
 		VolumesDir:        "volumes",
+		SMTPPort:          587,
 		AdminUsername:     "admin",
 	}
 
@@ -148,6 +158,13 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.CacheEnabled = tomlBool(sections, "cache", "enabled", cfg.CacheEnabled)
 		cfg.CacheURL = tomlGet(sections, "cache", "url", cfg.CacheURL)
 		cfg.CacheTTLSeconds = tomlInt(sections, "cache", "ttl_seconds", cfg.CacheTTLSeconds)
+		cfg.NotifyEnabled = tomlBool(sections, "notify", "enabled", cfg.NotifyEnabled)
+		cfg.SMTPHost = tomlGet(sections, "notify", "smtp_host", cfg.SMTPHost)
+		cfg.SMTPPort = tomlInt(sections, "notify", "smtp_port", cfg.SMTPPort)
+		cfg.SMTPUser = tomlGet(sections, "notify", "smtp_user", cfg.SMTPUser)
+		cfg.SMTPPassword = tomlGet(sections, "notify", "smtp_password", cfg.SMTPPassword)
+		cfg.SMTPFrom = tomlGet(sections, "notify", "from", cfg.SMTPFrom)
+		cfg.NotifyDefaultTo = tomlGet(sections, "notify", "default_to", cfg.NotifyDefaultTo)
 	case os.IsNotExist(err):
 		// No porter.toml — fine, env vars / defaults carry the config.
 	default:
@@ -186,6 +203,13 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.CacheEnabled = envBool("PORTER_CACHE_ENABLED", cfg.CacheEnabled)
 	cfg.CacheURL = envOr("PORTER_CACHE_URL", cfg.CacheURL)
 	cfg.CacheTTLSeconds = envInt("PORTER_CACHE_TTL_SECONDS", cfg.CacheTTLSeconds)
+	cfg.NotifyEnabled = envBool("PORTER_NOTIFY_ENABLED", cfg.NotifyEnabled)
+	cfg.SMTPHost = envOr("PORTER_SMTP_HOST", cfg.SMTPHost)
+	cfg.SMTPPort = envInt("PORTER_SMTP_PORT", cfg.SMTPPort)
+	cfg.SMTPUser = envOr("PORTER_SMTP_USER", cfg.SMTPUser)
+	cfg.SMTPPassword = envOr("PORTER_SMTP_PASSWORD", cfg.SMTPPassword)
+	cfg.SMTPFrom = envOr("PORTER_SMTP_FROM", cfg.SMTPFrom)
+	cfg.NotifyDefaultTo = envOr("PORTER_NOTIFY_DEFAULT_TO", cfg.NotifyDefaultTo)
 
 	if cfg.APIToken == "" {
 		return nil, fmt.Errorf("no API token configured — set [server] api_token in %s or PORTER_API_TOKEN", path)

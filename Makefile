@@ -23,11 +23,10 @@ VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo v0.1.0-beta-
 frontend:
 	cd frontend && npm install && npm run build
 
-# Build the Go binary. The single entrypoint is cmd/server (the control-plane
-# HTTP server with embedded workers); the same code also compiles as the
-# dispatch binary cmd/porter (`porter server|worker|kernel`).
+# Build the Go binary. The single entrypoint is cmd/porter (the control-plane
+# HTTP server with embedded workers; subcommands: `porter server|worker|kernel`).
 backend:
-	cd backend && go build -trimpath -o porter ./cmd/server
+	cd backend && go build -trimpath -o porter ./cmd/porter
 
 # Full build: frontend then backend. The single binary ships the dashboard.
 build: frontend backend
@@ -42,7 +41,7 @@ run: build
 dev:
 	@echo "Porter dev loop — two terminals:"
 	@echo ""
-	@echo "  Terminal 1 (backend API):  cd backend && go run ./cmd/server"
+	@echo "  Terminal 1 (backend API):  cd backend && go run ./cmd/porter server"
 	@echo "  Terminal 2 (frontend UI):  cd frontend && npm run dev"
 	@echo ""
 	@echo "Open http://localhost:5173 (Vite proxies /api -> :8080)"

@@ -16,6 +16,7 @@ const nav = [
   { section: "Overview" },
   { name: "Deployments", to: "/", icon: "◧" },
   { name: "Traffic", to: "/traffic", icon: "⇄" },
+  { name: "Analytics", to: "/analytics", icon: "◫" },
   { name: "Domains", to: "/domains", icon: "◉" },
   { section: "Manage" },
   { name: "Images", to: "/images", icon: "▤" },

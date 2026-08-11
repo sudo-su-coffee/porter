@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 import { getToken } from "./api/client";
 
 import DeploymentsList from "./views/DeploymentsList.vue";
+import Analytics from "./views/Analytics.vue";
 import ProjectDetail from "./views/ProjectDetail.vue";
 import VmDetail from "./views/VmDetail.vue";
 import Images from "./views/Images.vue";
@@ -15,6 +16,7 @@ import Login from "./views/Login.vue";
 
 const routes = [
   { path: "/", name: "list", component: DeploymentsList },
+  { path: "/analytics", name: "analytics", component: Analytics },
   { path: "/projects/:id", name: "project", component: ProjectDetail, props: true },
   { path: "/vms/:id", name: "vm", component: VmDetail, props: true },
   { path: "/traffic", name: "traffic", component: Traffic },

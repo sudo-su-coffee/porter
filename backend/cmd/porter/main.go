@@ -63,7 +63,30 @@ func main() {
 		printUsage()
 		return
 	}
+	if len(args) > 0 && args[0] == "migrate" {
+		os.Exit(runMigrate())
+	}
 	os.Exit(runServer(args))
+}
+
+// runMigrate applies all pending migrations, then seeds the minimum default
+// data (the config-admin's default org) so the control plane is immediately
+// usable. It does NOT start any VM engine or the HTTP listener.
+func runMigrate() int {
+	configPath := getenv("PORTER_CONFIG", "porter.toml")
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("config error: %v", err)
+	}
+	st := store.NewStore(cfg.DatabaseURL) // NewStore runs all pending Migrate calls
+	defer st.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := st.EnsureDefaultOrg(ctx, "admin", "default"); err != nil {
+		log.Fatalf("migrate: seed default org: %v", err)
+	}
+	log.Printf("migrate: schema up to date and default org seeded (db=%s)", cfg.DatabaseURL)
+	return 0
 }
 
 func printUsage() {
@@ -74,6 +97,7 @@ Run the app (control plane + dashboard):
   porter                      # start the API + embedded lifecycle workers
 
 Utilities:
+  porter migrate               # run pending DB migrations + seed default org
   porter version               # print the version
 
 Config is read from $PORTER_CONFIG (default: porter.toml).

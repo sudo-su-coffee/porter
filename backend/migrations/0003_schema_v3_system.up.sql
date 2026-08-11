@@ -84,7 +84,16 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS healthcheck JSONB;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS env JSONB NOT NULL DEFAULT '{}';
 
 -- --- replicas: one row per Firecracker microVM (renamed from 0001's vms) ---
-ALTER TABLE vms RENAME TO replicas;
+DO $$
+BEGIN
+  -- Idempotent vms -> replicas rename: only run when the old table exists and
+  -- the new one does not (re-running against a partially-migrated or
+  -- already-consolidated DB must not fail).
+  IF to_regclass('public.vms') IS NOT NULL AND to_regclass('public.replicas') IS NULL THEN
+    ALTER TABLE vms RENAME TO replicas;
+  END IF;
+END
+$$;
 ALTER TABLE replicas ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_replicas_project_index ON replicas(project_id, replica_index);
 

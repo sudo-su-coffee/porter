@@ -35,3 +35,11 @@ enabled = true
 [ssh]
 enabled     = false
 listen_addr = ":2222"
+
+# ---------------------------------------------------------------------------
+[cache]
+# Optional Redis read-through cache (fast path for hot reads). Off by default —
+# when Redis is unreachable the store degrades gracefully to Postgres reads.
+enabled               = true
+url                   = "redis://localhost:6379/0"   # no user/password for the local demo
+ttl_seconds           = 15

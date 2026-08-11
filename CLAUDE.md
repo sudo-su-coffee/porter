@@ -1,76 +1,158 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
+
+## First principle (maintainer's directive)
+
+**Never degrade — every change must make the project strictly better.**
+No "shipping a stub that looks done," no dropping a working feature to widen
+scope, no trading real functionality for a nicer-looking but hollow surface.
+When a task can't be fully completed honestly, ship the smallest *real*
+piece and mark the rest plainly — never a fake `200` + empty JSON standing in
+for a feature. If something in this file contradicts what the code actually
+does, trust the code and fix this file.
 
 ## What Porter is
 
-Porter is a self-hosted **control-plane UI/API for Firecracker microVMs**. It deploys Docker/OCI images as kernel-isolated microVMs with automatic DNS, SSH, healthchecking/auto-replacement, and Vercel-style preview deploys. Pure-Go control plane, single binary, single-tenant by permanent design.
+A self-hosted **control-plane UI/API for Firecracker microVMs** — your own
+Vercel / Fly.io, on one box. You give it a Docker/OCI image (or
+`docker-compose.yml`); it boots each deploy as a **kernel-isolated microVM**
+with DNS, SSH, healthchecking/auto-replace, traffic logging, and preview
+domains — all from a Vue 3 dashboard + REST API. Pure-Go control plane, single
+binary, single-tenant by permanent design.
 
-**Execution engine (the direction):** Porter controls **containerd** (not raw Firecracker) and uses the [`firecracker-containerd](https://github.com/firecracker-microvm/firecracker-containerd) shim (runtime `aws.firecracker`) to boot microVMs — image pull, snapshotting, jailer wiring and the in-VM agent are the shim's job. `firecracker-containerd` is AWS's own Fargate/Lambda runtime.
+**Execution engine:** OCI images boot through **containerd** using the
+[`aws.firecracker`](https://github.com/firecracker-microvm/firecracker-containerd)
+shim (image pull, snapshots, jailer wiring, in-VM agent = the shim's job — the
+same runtime AWS Fargate/Lambda run on). "Bare" rootfs+vmlinux images are the
+one exception: `internal/runtime` drives the Firecracker API socket directly.
+There is **no Docker daemon** in Porter's own logic, and no Kubernetes.
 
-## Docs you can rely on (read these first, they are the truth)
+## Docs (read first — they are the truth)
 
-There are only three root markdown files. `README.md` is the **single, central, full-detail reference** (architecture, API, compose rules, config, deployment, strategy). `versions.md` is the standalone roadmap (v0.1.0 → v1.0.0 → vision). `CLAUDE.md` is this file.
+Only two root markdown files matter:
 
-- `README.md` — **the** source of truth. Read the *Current Code State (Migration Status)* section before changing code: it distinguishes the **current** direct-Firecracker `backend/` from the **target** firecracker-containerd rewrite.
-- `versions.md` — roadmap. v0.1.0-beta ("Core Runtime & First Deployment") is the current target.
-- The old auxiliary docs used to live in `ARCHITECTURE.md`/`BUILD.md`/`INSTALL.md`/`implementation_plan.md` (now deleted); their content is consolidated into `README.md`. **Do not re-create them.**
+- `README.md` — the single, central, source-of-truth reference (architecture,
+  API catalog, compose rules, config, failure handling, Roadmap/Planned).
+  Re-verified against source on every revision → **wins any disagreement.**
+- `PLAN.md` — the phased roadmap with per-feature `[DONE]` / `[PARTIAL]` /
+  `[PLANNED]` / `[STUBBED]` tags. If it and README disagree, README wins.
 
-## Direction & coding standards (what the maintainer wants)
+**Before claiming "X is shipped," verify it** (mandatory): read the handler in
+`backend/internal/api/handlers_impl.go` — empty JSON = stub; check `git log
+--oneline -n 15`; check the migration ceiling in `backend/migrations/*.sql`.
 
-- The backend should be written in Zerodha-style Go: a `server`/`worker` command split, `internal/...` packages (api, vmmanager, compose, config, store, netmgr, sse/sender/health, dns, gateway), an explicit `config.Load`, structured logging, a piped middleware chain, and graceful shutdown. The current `backend/` is a flat single `package main`, one responsibility per file — the **migration/rewrite should move toward the structured layout**. The README's architecture section describes that target.
-- Single front door `backend/`, single binary, pure Go. Everything still builds/tests the same way.
+## Golden rules (never break)
+
+1. **PostgreSQL-only storage.** Every durable write goes through
+   `internal/store` (pgx). No SQLite, no MySQL, no on-disk JSON stores.
+2. **Firecracker is the only runtime.** Real microVMs via containerd +
+   `aws.firecracker` shim (OCI) or direct Firecracker API socket (bare
+   rootfs). No simulated/spoofed boots.
+3. **Redis = cache/queue only** (`internal/cache`, off by default). Postgres
+   stays the source of truth.
+4. **Use proven Go libraries, don't hand-code.** DNS → `miekg/dns`; SSH
+   bridge → `golang.org/x/crypto/ssh`; everything else existing in `go.mod`.
+   Own code = control-plane glue, never reimplementations.
+5. **UI-only product.** End users drive the dashboard; no user-facing CLI.
+   `cmd/porter` subcommands are operator/installer internals.
+6. **App runs offline** — images referenced by URL/OCI ref, never local paths.
 
 ## Build, test, run
 
-The root `Makefile` drives everything. The Go binary **embeds** the built frontend via `go:embed web/dist`, so the frontend must be built first.
+The root `Makefile` drives everything. The Go binary **embeds** the built
+frontend via `go:embed web/dist`, so the frontend must be built first.
 
 ```bash
-make frontend   # npm install + vite build → writes ../backend/web/dist (source-only, no bundle checked in)
-make backend    # go build → backend/porter
-make build      # frontend then backend
-make run        # build + run backend/porter in foreground
-make dev        # backend only: cd backend && go run . (run `npm run dev` separately for Vite hot-reload + API proxy)
-make clean      # remove build artifacts, db, node_modules
+make frontend   # cd frontend && npm install && npm run build → backend/web/dist
+make backend    # cd backend && go build -o porter ./cmd/porter
+make build      # frontend then backend (single binary)
+make run        # build + run ./backend/porter server (default subcommand)
+make dev        # prints the two-terminal loop: backend `go run ./cmd/porter` + Vite :5173
+make migrate    # golang-migrate up against backend/migrations (PORTER_DATABASE_URL override ok)
+make test       # cd backend && go test ./...
+make clean      # remove artifacts, db, node_modules
 ```
 
-Backend tests (the only tests in the repo):
+Backend tests:
 
 ```bash
-cd backend && go test ./...
-# single test:
-cd backend && go test -run TestParseComposeBasic -v .
+cd backend && go test ./...          # or go vet ./...
+cd backend && go test -run TestParseComposeBasic -v ./internal/compose
 ```
 
-Runtime requirements (Linux host): KVM (`/dev/kvm`), a `firecracker` binary (current build) — or containerd + the `aws.firecracker` shim (after migration), a `vmlinux` kernel, and one `rootfs.ext4` per service (current build). `.env` in `backend/` documents the `PORTER_*` env vars (not auto-loaded; `export` them or use `direnv`). Build with Go 1.22+ (go.mod says 1.25.0). Currently one Go dependency (`modernc.org/sqlite`, pure-Go, no cgo); the migration adds `containerd` + OCI deps (`go mod tidy` on Linux first).
+Runtime requirements (Linux host): KVM (`/dev/kvm`), PostgreSQL, containerd +
+the `aws.firecracker` shim (OCI boots), a `vmlinux` kernel + rootfs (bare
+boots). Windows dev machine: code/compile/test fine; real VM boots need a
+Linux host. Default DSN: `postgres://porter:porter@localhost:5432/porter?sslmode=disable`
+(`deploy/dev.sh` provisions it). Go 1.25 (go.mod).
 
-## Auth model (important)
+## Config & auth
 
-UI and API share the same auth: **admin login gates a bearer token.** `POST /login` (`api.go`) checks the single `[admin]` username/password from `porter.toml` via `crypto/subtle` constant-time compare, then returns `api_token`. Every protected route is wrapped by `a.auth()` and requires `Authorization: Bearer <token>` against that same `api_token`. No user database, no session expiry, no lockout (just a fixed 300ms delay on bad login). Frontend stores the token in `localStorage` (`frontend/src/api/client.js`). In production the Control API must be trusted-network-only.
+- **Config:** `porter.toml` (root of `backend/`; see `porter.toml`) with
+  `PORTER_*` env overrides. `config.LoadConfig` refuses to start without
+  `[database] url`, `[server] api_token`, and `[admin] password`. Optional
+  sections: `[gateway]`, `[dns]`, `[health]`, `[ssh]`, `[cache]` (Redis, off
+  by default), `[tls]` (ACME), `[autoscale]`, `[notify]` (SMTP). Exact
+  struct: `backend/internal/config/config.go`.
+- **Auth:** `POST /login` checks the bootstrap admin (`[admin]` username/
+  password from porter.toml) via `crypto/subtle`, returns a bearer token.
+  Per-user accounts live in the `users` table; per-user API tokens + fine-
+  grained permission codes guard routes (`internal/api/rbac`). The frontend
+  sends `Authorization: Bearer <token>` **and** an `X-CSRF-Token` (fetched
+  from `GET /csrf`) on writes. Trusted-network-only in production.
 
-## Architecture — how it's actually put together right now
+## Architecture (`backend/`, structured `internal/` packages)
 
-The checked-in backend is one Go package `main` in `backend/`, one component per file (stdlib only plus `modernc.org/sqlite`) — **currently the older direct-Firecracker design, mid-migration** to the firecracker-containerd + structured layout described in the README:
+Entrypoint `backend/cmd/porter/main.go` wires everything in `runServer`:
+store → event hub → VM engine → gateway/DNS/TLS/health/SSH → HTTP mux on
+:8080 (dashboard embedded). Key packages:
 
-- `api.go` — HTTP server, Go 1.22+ pattern routing on `net/http.ServeMux` (no router dep). Registers all routes in `Routes()`, wires `a.auth()`, defines the `API` struct holding every dependency. Endpoints include `GET/POST /vms`, `POST /vms/{id}/stop|start`, `DELETE /vms/{id}`, projects, `/login`, `/events`.
-- `vmmanager.go` — spawns one `firecracker --api-sock <path>` OS process per VM, configures it through `fcapi.go`, tracks a `runningVM` (cmd + socket), handles boot (boot source, rootfs drive, network interface, machine config, `InstanceStart`) and graceful stop (CtrlAltDel → SIGTERM → SIGKILL). Health is TCP-connect-only via `probeHealth`.
-- `fcapi.go` — `FCClient`, a minimal `net/http` client over each VM's Unix-domain API socket (six small PUT requests; replaces `firecracker-go-sdk`).
-- `store.go` — `Store` over SQLite (`porter.db`, `modernc.org/sqlite`, no cgo). Each table is `id → JSON blob` (not normalized) so a field addition is one-place. Also an in-memory traffic ring buffer per VM.
-- `compose.go` — `ParseCompose`, a hand-rolled indentation parser for a constrained Compose v3 subset (no YAML dep), topological sort on `depends_on`, rejects `build:` and circular deps. `compose_test.go` covers it.
-- `netmgr.go` — per-project `/24` subnets (`10.42.N.0/24`) and `tap` device creation via `ip tuntap`. Networking is **half-wired** (tap only; no bridge/NAT by default).
-- `sse.go` — `Hub` for Server-Sent-Events, broadcasts live VM state to the dashboard over `GET /events`.
-- `config.go` + `toml.go` — config from `porter.toml` (`[server]`, `[firecracker]`, `[admin]`) with `PORTER_*` env overrides; `ParseTOML` is a hand-rolled subset parser. `main.go` refuses to start without `api_token` + admin password.
-- `types.go` — the canonical `VM`/`Project`/`Domain`/etc. structs with JSON tags. VM states: `pending`/`booting`/`running`/`stopping`/`stopped`/`failed`; health: `healthy`/`unhealthy`/`checking`.
+| Package | Responsibility |
+|---|---|
+| `internal/store` | Postgres store (pgx). Rows are `id → JSON blob` + typed columns for querying. Migrations in `backend/migrations/*.sql`. Redis read-through via `SetCache`. |
+| `internal/api` | `api.go` (route registration ~281 routes, `Routes()`, auth/RBAC middleware, rate limit) + `handlers_impl.go` (the handlers — **check here for stubs**). |
+| `internal/runtime` | `VMManager`: boot/stop/exec VMs, containerd OCI path + bare Firecracker path, per-project subnet wiring. |
+| `internal/netmgr` | Single subnet/IP/MAC allocator (per-project /24, host tap). `internal/net` was removed — don't reintroduce. |
+| `internal/compose` | Hand-rolled `ParseCompose` (no YAML dep): image-only services, acyclic `depends_on`, rejects `build:`. |
+| `internal/event` | SSE hub — `GET /events`, live VM state to dashboard. |
+| `internal/gateway` | Host-routing reverse proxy + traffic logger; `portforward.go` binds compose `HostPort`→VM. |
+| `internal/dns` | `server.go` real UDP/TCP authoritative DNS (miekg/dns) for `*.baseDomain`; `domains.go` auto-assigns preview/prod. |
+| `internal/tls` | `autocert.go` — Let's Encrypt ACME, HTTP-01, cert cache. |
+| `internal/health` | Per-VM healthcheck probes + auto-replace. |
+| `internal/cache` | Optional Redis read-through (no-op when off). |
+| `internal/volumes` | Real host dir + sparse `data.img` persistent volumes. |
+| `internal/imagecatalog` | Image library + golden seeds (redis/postgresql/mysql). |
+| `internal/metrics` | CPU/mem sampler → `metrics_samples`. |
+| `internal/cron` | 5-field cron scheduler booting job microVMs. |
+| `internal/autoscale` | Horizontal autoscaler on replica pools. |
+| `internal/notify` | SMTP email notifications. |
+| `internal/sshgw` | SSH gateway bridging into VM tasks via `task.Exec` (no sshd in guest). |
+| `internal/startup` | Startup sanity check (shim/jailer/KVM) — fails loudly. |
+| `internal/types` | Canonical structs (`Project`, `VM`/replica, etc.) with JSON tags. |
+| `internal/config` | TOML + env config load. |
 
-**Stage 2 — DNS/TLS (implemented):**
-- `internal/dns/server.go` — real UDP/TCP authoritative DNS server (miekg/dns) for `*.baseDomain` zones, resolves to gateway IP
-- `internal/dns/domains.go` — auto-assigns preview/prod domains on project creation (`<slug>.preview.<base>` and `<slug>.<base>`)
-- `internal/tls/autocert.go` — automatic TLS via Let's Encrypt ACME (`golang.org/x/crypto/acme/autocert`), HTTP-01 challenges, cert caching, daily renewal
+**Frontend** (`frontend/`): Vue 3 + Vite + vue-router, dev-proxies `/api` to
+:8080 (`vite.config.js`). Auth'd client in `src/api/`, SSE consumer in
+`src/api/events.js`. Reusable components in `src/components/`. Design tokens
+in `src/style.css`.
 
-**Frontend** (`frontend/`): Vue 3 + Vite + vue-router, dev-proxying API to `localhost:8080` (see `vite.config.js`). `src/api/client.js` is the auth'd `fetch` wrapper (401 → `/login` redirect); `src/api/events.js` consumes the SSE stream. Views: `DeploymentsList`, `ProjectDetail`, `VmDetail`, `Login`. Reusable components in `src/components/`. The README's Dashboard spec lists the target UI (traffic table, domains panel, logs, image picker, log/status UI).
+## Known stubs / partials (verify before claiming)
 
-## When changing code, respect the migration seam
+A meaningful slice of the huge API surface returns correct-but-empty JSON
+rather than real logic — analytics/web-vitals, redirects, microfrontends,
+cache-purge, and similar Vercel-parity routes. README § API + the handler
+source are the truth. Don't "complete" a stub by faking data; wire real
+subsystems or leave the honest stub.
 
-- Read `README.md → Current Code State` before touching `vmmanager.go`/`fcapi.go`/`config.go`: those are the ones slated to change in the firecracker-containerd migration.
-- Don't spread the complexity across files; match the Zerodha-style `internal/` package move if you're restructuring.
-- Keep the README's API + compose-mapping docs accurate when you change behavior — their tests (`compose_test.go`) must stay green.
+## Contribution rules (maintainer's workflow)
+
+- **Windows:** use Read/Glob/Grep for exploring code, not bash.
+- Write code in one pass; **no compile in the loop**; run `go vet ./...` +
+  `go test ./...` once at the end. Commit only when asked.
+- Postgres only; images by URL/OCI ref (must work offline); honest status —
+  never fake a feature.
+- Front-end work also needs the SSE events + CSRF conventions above.
+- A richer, always-current status guide lives in the
+  `porter-paas-expert` skill (`.claude/skills/porter-paas-expert/SKILL.md`) —
+  invoke `/porter-paas-expert` for feature-status answers.

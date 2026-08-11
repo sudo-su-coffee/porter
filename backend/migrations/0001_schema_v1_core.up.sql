@@ -5,7 +5,7 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto; -- for gen_random_uuid()
 
-CREATE TABLE projects (
+CREATE TABLE IF NOT EXISTS projects (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT NOT NULL UNIQUE,
     kind            TEXT NOT NULL CHECK (kind IN ('compose', 'single_image')),
@@ -16,7 +16,7 @@ CREATE TABLE projects (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE services (
+CREATE TABLE IF NOT EXISTS services (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE services (
     UNIQUE (project_id, name)
 );
 
-CREATE TABLE vms (
+CREATE TABLE IF NOT EXISTS vms (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id      UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     replica_index   INT NOT NULL DEFAULT 0,
@@ -51,7 +51,7 @@ CREATE TABLE vms (
     UNIQUE (service_id, replica_index)
 );
 
-CREATE TABLE domains (
+CREATE TABLE IF NOT EXISTS domains (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id      UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     domain          TEXT NOT NULL UNIQUE,
@@ -60,7 +60,7 @@ CREATE TABLE domains (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE volumes (
+CREATE TABLE IF NOT EXISTS volumes (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT NOT NULL UNIQUE,
     size_mib        INT NOT NULL,
@@ -68,7 +68,7 @@ CREATE TABLE volumes (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE ssh_keys (
+CREATE TABLE IF NOT EXISTS ssh_keys (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     label           TEXT NOT NULL,
     public_key      TEXT NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE ssh_keys (
     revoked_at      TIMESTAMPTZ
 );
 
-CREATE TABLE servers (
+CREATE TABLE IF NOT EXISTS servers (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     hostname        TEXT NOT NULL UNIQUE,
     registered_at   TIMESTAMPTZ NOT NULL DEFAULT now()

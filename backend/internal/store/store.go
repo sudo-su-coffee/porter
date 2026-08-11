@@ -167,14 +167,20 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 func splitSQL(body string) []string {
 	var out []string
 	var cur strings.Builder
+	inDollar := false // inside $$-quoted (DO block / function body)
 	for _, line := range strings.Split(body, "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" || strings.HasPrefix(t, "--") {
 			continue
 		}
+		// Toggle dollar-quoting: a line containing $$ starts/ends a quoted body.
+		// We keep whole DO blocks together (they contain internal ';').
+		if strings.Contains(t, "$$") {
+			inDollar = !inDollar
+		}
 		cur.WriteString(line)
 		cur.WriteString("\n")
-		if strings.HasSuffix(strings.TrimSpace(line), ";") {
+		if !inDollar && strings.HasSuffix(strings.TrimSpace(line), ";") {
 			out = append(out, cur.String())
 			cur.Reset()
 		}

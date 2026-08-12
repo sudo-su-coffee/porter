@@ -17,7 +17,12 @@ const newMember = ref({ username: "", role: "member" });
 const newKeyName = ref("");
 const keyToken = ref("");
 
-const TABS = ["orgs", "groups", "members", "users", "apikeys"];
+const roles = ref([]);
+const permissions = ref([]);
+const rolePerms = ref({});
+const newRole = ref({ id: "", name: "", description: "" });
+
+const TABS = ["orgs", "groups", "members", "users", "apikeys", "roles"];
 
 async function load() {
   error.value = "";
@@ -67,7 +72,54 @@ async function addKey() {
   load();
 }
 
-onMounted(load);
+async function loadRoles() {
+  try {
+    const [r, p] = await Promise.allSettled([api("/roles"), api("/permissions")]);
+    roles.value = r.status === "fulfilled" ? r.value || [] : [];
+    permissions.value = p.status === "fulfilled" ? p.value || [] : [];
+  } catch (_) {}
+}
+
+function rolePermsOf(roleId) {
+  return rolePerms.value[roleId] || [];
+}
+
+async function createRole() {
+  if (!newRole.value.id.trim() || !newRole.value.name.trim()) return;
+  await api("/roles", { method: "POST", body: JSON.stringify(newRole.value) });
+  newRole.value = { id: "", name: "", description: "" };
+  loadRoles();
+}
+
+async function editRole(r) {
+  await api(`/roles/${r.id}`, { method: "PATCH", body: JSON.stringify({ name: r.name, description: r.description }) });
+  loadRoles();
+}
+
+async function deleteRole(r) {
+  if (!confirm(`Delete role "${r.name}"? Members assigned to it keep their memberships.`)) return;
+  await api(`/roles/${r.id}`, { method: "DELETE" });
+  loadRoles();
+}
+
+async function togglePerm(r, permId) {
+  const has = rolePermsOf(r.id).includes(permId);
+  const path = `/roles/${r.id}/permissions/${permId}`;
+  await api(path, { method: has ? "DELETE" : "POST" });
+  refreshRolePerms(r.id);
+}
+
+async function refreshRolePerms(roleId) {
+  try {
+    const res = await api(`/roles/${roleId}/permissions`);
+    rolePerms.value[roleId] = (res && res.permissions) || [];
+  } catch (_) {
+    rolePerms.value[roleId] = [];
+  }
+}
+
+
+onMounted(() => { load(); loadRoles(); });
 </script>
 
 <template>
@@ -180,6 +232,50 @@ onMounted(load);
           <tr v-if="!apiKeys.length"><td colspan="2" class="hint" style="text-align:center; padding:18px">No API keys yet.</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Roles & Permissions -->
+  <div v-if="tab === 'roles'">
+    <div class="filter-bar">
+      <input v-model="newRole.id" placeholder="role id (e.g. deployer)" style="width:150px" />
+      <input v-model="newRole.name" placeholder="Name" />
+      <input v-model="newRole.description" placeholder="Description" style="flex:1; max-width:280px" />
+      <button class="btn btn-sm btn-primary" @click="createRole">+ Create Role</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Role</th><th>Description</th><th>Permissions</th><th style="text-align:right">Actions</th></tr></thead>
+        <tbody>
+          <tr v-for="r in roles" :key="r.id">
+            <td><span class="mono">{{ r.id }}</span> <span class="tag tag-accent">{{ r.name }}</span></td>
+            <td class="hint">{{ r.description }}</td>
+            <td class="hint">{{ rolePermsOf(r.id).length || 0 }} grant(s)</td>
+            <td style="text-align:right">
+              <div class="actions">
+                <button class="icon-btn" title="Edit" @click="editRole(r)">✎</button>
+                <button class="icon-btn danger" title="Delete" @click="deleteRole(r)">✕</button>
+              </div>
+            </td>
+          </tr>
+          <tr v-if="!roles.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No roles yet — create one to grant fine-grained permissions.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="page-sub" style="margin:20px 0 10px">Permissions by role</div>
+    <div class="card" v-for="r in roles" :key="r.id">
+      <div class="page-sub" style="margin-bottom:10px">
+        <b>{{ r.name }}</b>
+        <button class="btn btn-sm" style="float:right" @click="refreshRolePerms(r.id)">Reload perms</button>
+      </div>
+      <div class="perm-grid">
+        <label class="perm-chip" v-for="p in permissions" :key="p.id">
+          <input type="checkbox" :checked="rolePermsOf(r.id).includes(p.id)" @change="togglePerm(r, p.id)" />
+          <span>{{ p.id }}</span>
+        </label>
+        <div v-if="!permissions.length" class="hint">No permission catalog returned.</div>
+      </div>
     </div>
   </div>
 </template>

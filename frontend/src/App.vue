@@ -16,14 +16,17 @@ const nav = [
   { section: "Overview" },
   { name: "Deployments", to: "/", icon: "◧" },
   { name: "Traffic", to: "/traffic", icon: "⇄" },
+  { name: "Analytics", to: "/analytics", icon: "◫" },
   { name: "Domains", to: "/domains", icon: "◉" },
   { section: "Manage" },
   { name: "Images", to: "/images", icon: "▤" },
   { name: "Servers", to: "/servers", icon: "⬒" },
+  { name: "Volumes", to: "/volumes", icon: "⚄" },
   { name: "Logs", to: "/logs", icon: "≡" },
   { section: "Access" },
   { name: "Teams", to: "/teams", icon: "⚑" },
   { name: "Settings", to: "/settings", icon: "⚙" },
+  { name: "Feedback", to: "/feedback", icon: "✉" },
 ];
 
 function isActive(to) {

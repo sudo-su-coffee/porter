@@ -58,20 +58,19 @@ git add -A && git commit -m "refactor(net): consolidate internal/net into netmgr
    (currently keep `v0.1.0-beta-dev` — user explicitly wants beta-dev until fully
    working). Update `V1_TRACKING.md` status.
 
-## 4. FRONTEND (#14) — the remaining big track
+## 4. FRONTEND (#14) — COMPLETED (this pass)
 
-Goal: Vercel/Apple-quality Vue 3 dashboard. Reference: `frontendsample/` (excluded
-from git via `.gitignore`). Existing shell: `frontend/` (Vue 3 + Vite, dev proxy → :8080).
-Build: `make frontend` (npm install + vite build → `backend/web/dist`, embedded via go:embed).
+Vue 3 dashboard (`frontend/`) is wired against the real API and `npm run build` is green.
 
-Views to build against the ALREADY-WORKING API:
-- Dashboard / overview (`GET /overview`, `GET /usage`)
-- Project detail: Deployments, Domains, Logs, Traffic/Analytics, Firewall, Volumes
-- Project settings (General/Build/Git/Env/Secrets/Security/Networking — all have real endpoints)
-- Members + Roles/Permissions UI (`GET /roles`, `GET /permissions`, `PUT /roles/{id}/permissions`)
-- Login/auth (per-user token) + CSRF header on writes
+Added in this pass:
+- **Analytics view** (`/analytics`, `frontend/src/views/Analytics.vue`) — real `/usage` metering + per-day sparklines + per-project breakdown.
+- **Project detail new tabs** (`frontend/src/components/ProjectAnalytics.vue`, `ProjectFirewall.vue`, `ProjectCron.vue`, `ProjectSecrets.vue`, `ProjectSettings.vue`):
+  analytics (usage/timeseries/paths/status-codes/bandwidth), firewall rules CRUD + toggle, cron jobs CRUD + run-now, secrets create/list/delete, settings sub-tabs (general/build/git/security/rollout).
+- **Deployment promote/rollback** buttons in the ProjectDetail deployments tab (`POST .../deployments/{id}/promote|rollback`).
+- **Roles & Permissions** tab in Teams (`/roles`, `/permissions`, per-role permission toggles).
 
-Do NOT rebuild the backend for the frontend — every route already exists.
+Keep the API as the source of truth: every route these call is real. If a handler shape
+changes, mirror it in the panel's `api()` calls — no mock data.
 
 ## 5. Rules to respect
 

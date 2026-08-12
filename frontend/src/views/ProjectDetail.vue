@@ -7,6 +7,11 @@ import StatusBadge from "../components/StatusBadge.vue";
 import HealthPill from "../components/HealthPill.vue";
 import ScaleModal from "../components/ScaleModal.vue";
 import AddDomainModal from "../components/AddDomainModal.vue";
+import ProjectAnalytics from "../components/ProjectAnalytics.vue";
+import ProjectFirewall from "../components/ProjectFirewall.vue";
+import ProjectCron from "../components/ProjectCron.vue";
+import ProjectSecrets from "../components/ProjectSecrets.vue";
+import ProjectSettings from "../components/ProjectSettings.vue";
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -24,7 +29,7 @@ const showScale = ref(false);
 const showDomain = ref(false);
 const newEnv = ref({ key: "", value: "" });
 
-const TABS = ["overview", "deployments", "traffic", "logs", "domains", "environment", "settings"];
+const TABS = ["overview", "deployments", "analytics", "traffic", "logs", "domains", "environment", "secrets", "crons", "firewall", "settings"];
 
 async function load() {
   error.value = "";
@@ -91,6 +96,26 @@ async function deleteProject() {
   router.push({ name: "list" });
 }
 
+async function promote(d) {
+  if (!confirm(`Promote deployment #${d.revision ?? d.id.slice(0, 8)} to 100%?`)) return;
+  try {
+    await api(`/projects/${props.id}/deployments/${d.id}/promote`, { method: "POST" });
+    loadDeployments();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function rollback(d) {
+  if (!confirm(`Roll back deployment #${d.revision ?? d.id.slice(0, 8)} to its previous release?`)) return;
+  try {
+    await api(`/projects/${props.id}/deployments/${d.id}/rollback`, { method: "POST" });
+    load();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 onMounted(() => {
   load();
   connectEvents(() => load());
@@ -155,20 +180,51 @@ onUnmounted(() => disconnectEvents());
 
     <!-- Deployments -->
     <div v-if="tab === 'deployments'">
+      <div class="filter-bar">
+        <button class="btn btn-sm" @click="loadDeployments">Refresh</button>
+        <span class="hint">{{ deployments.length }} deployment(s)</span>
+      </div>
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Revision</th><th>Status</th><th>Image</th><th>Created</th></tr></thead>
+          <thead><tr><th>Revision</th><th>Status</th><th>Image</th><th>Rollout</th><th>Created</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody>
             <tr v-for="d in deployments" :key="d.id">
               <td class="num">#{{ d.revision ?? d.id.slice(0, 8) }}</td>
               <td><StatusBadge :state="d.build_status || 'ready'" /></td>
               <td class="mono">{{ d.image_digest || d.image || '—' }}</td>
+              <td class="num">{{ d.rollout_percent != null ? d.rollout_percent + '%' : '—' }}</td>
               <td class="num muted">{{ new Date(d.created_at).toLocaleString() }}</td>
+              <td style="text-align:right">
+                <div class="actions">
+                  <button class="icon-btn green" title="Promote" @click="promote(d)">▲</button>
+                  <button class="icon-btn" title="Rollback" @click="rollback(d)">↩</button>
+                </div>
+              </td>
             </tr>
-            <tr v-if="!deployments.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No deployments recorded.</td></tr>
+            <tr v-if="!deployments.length"><td colspan="6" class="hint" style="text-align:center; padding:18px">No deployments recorded.</td></tr>
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Analytics -->
+    <div v-if="tab === 'analytics'">
+      <ProjectAnalytics :project-id="id" />
+    </div>
+
+    <!-- Secrets -->
+    <div v-if="tab === 'secrets'">
+      <ProjectSecrets :project-id="id" />
+    </div>
+
+    <!-- Cron -->
+    <div v-if="tab === 'crons'">
+      <ProjectCron :project-id="id" />
+    </div>
+
+    <!-- Firewall -->
+    <div v-if="tab === 'firewall'">
+      <ProjectFirewall :project-id="id" />
     </div>
 
     <!-- Traffic -->
@@ -243,14 +299,19 @@ onUnmounted(() => disconnectEvents());
     </div>
 
     <!-- Settings -->
-    <div v-if="tab === 'settings'" class="card">
-      <div class="page-sub" style="margin-bottom:12px">
-        Restart policy: <b>{{ project.restart_policy || 'on-failure' }}</b>
-        &middot; Desired replicas: <b>{{ project.replicas_desired }}</b>
+    <div v-if="tab === 'settings'">
+      <div class="card" style="margin-bottom:16px">
+        <div class="page-sub" style="margin-bottom:12px">
+          Restart policy: <b>{{ project.restart_policy || 'on-failure' }}</b>
+          &middot; Desired replicas: <b>{{ project.replicas_desired }}</b>
+        </div>
+        <ProjectSettings :project-id="id" />
       </div>
-      <div class="page-sub">Danger zone — permanently stop and remove this project and all replicas.</div>
-      <div style="margin-top:12px">
-        <button class="btn btn-danger btn-sm" @click="deleteProject">Delete Project</button>
+      <div class="card">
+        <div class="page-sub">Danger zone — permanently stop and remove this project and all replicas.</div>
+        <div style="margin-top:12px">
+          <button class="btn btn-danger btn-sm" @click="deleteProject">Delete Project</button>
+        </div>
       </div>
     </div>
   </template>

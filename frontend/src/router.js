@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 import { getToken } from "./api/client";
 
 import DeploymentsList from "./views/DeploymentsList.vue";
+import Analytics from "./views/Analytics.vue";
 import ProjectDetail from "./views/ProjectDetail.vue";
 import VmDetail from "./views/VmDetail.vue";
 import Images from "./views/Images.vue";
@@ -12,9 +13,12 @@ import Domains from "./views/Domains.vue";
 import Teams from "./views/Teams.vue";
 import Settings from "./views/Settings.vue";
 import Login from "./views/Login.vue";
+import Volumes from "./views/Volumes.vue";
+import Feedback from "./views/Feedback.vue";
 
 const routes = [
   { path: "/", name: "list", component: DeploymentsList },
+  { path: "/analytics", name: "analytics", component: Analytics },
   { path: "/projects/:id", name: "project", component: ProjectDetail, props: true },
   { path: "/vms/:id", name: "vm", component: VmDetail, props: true },
   { path: "/traffic", name: "traffic", component: Traffic },
@@ -25,6 +29,8 @@ const routes = [
   { path: "/servers", name: "servers", component: Servers },
   { path: "/logs", name: "logs", component: Logs },
   { path: "/login", name: "login", component: Login },
+  { path: "/volumes", name: "volumes", component: Volumes },
+  { path: "/feedback", name: "feedback", component: Feedback },
 ];
 
 const router = createRouter({

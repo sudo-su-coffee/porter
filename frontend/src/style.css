@@ -264,6 +264,39 @@ main { max-width: 1220px; padding: 28px 30px 96px; }
 .tag-amber  { color: var(--amber); border-color: rgba(240, 180, 41, 0.35); background: rgba(240, 180, 41, 0.08); }
 .tag-red    { color: var(--red); border-color: rgba(242, 85, 90, 0.35); background: rgba(242, 85, 90, 0.08); }
 
+/* ---------- Permissions chip grid (role editor) ---------- */
+.perm-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.perm-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-family: var(--mono, ui-monospace, monospace);
+  padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-elev);
+  color: var(--text-dim); cursor: pointer;
+  user-select: none;
+}
+.perm-chip input { accent-color: var(--accent); }
+.perm-chip:has(input:checked) { border-color: rgba(91, 140, 255, 0.5); color: var(--text); background: rgba(91, 140, 255, 0.08); }
+
+/* ---------- Toggle switch (firewall / cron active states) ---------- */
+.toggle { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
+.toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.toggle span {
+  width: 34px; height: 18px;
+  border-radius: 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  position: relative;
+  transition: background .15s ease;
+}
+.toggle span::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform .15s ease, background .15s ease;
+}
+.toggle input:checked + span { background: rgba(91, 140, 255, 0.25); border-color: rgba(91, 140, 255, 0.5); }
+.toggle input:checked + span::after { transform: translateX(16px); background: var(--accent-strong); }
+
 /* ---------- Filters / segmented ---------- */
 .filter-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .seg {

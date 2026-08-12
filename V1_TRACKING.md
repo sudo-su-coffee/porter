@@ -210,9 +210,9 @@ Polish:
 
 ## Status (updated after each commit)
 
-- **Current stage:** **v1.0.0** — backend complete & green. Commits `2bf52bd`, `e6d7d04`, `c3ee539` + prior work.
-- **Build:** ✅ `go build/vet/test` green (281 routes, no empty-JSON stubs)
-- **Working tree:** clean, all uncommitted sprint work committed
+- **Current stage:** **v1.0.0** — backend complete & green; frontend dashboard coverage completed.
+- **Build:** ✅ `go build/vet/test` green (281 routes, no empty-JSON stubs); ✅ `npm run build` green (dashboard → `backend/web/dist`, embedded via go:embed)
+- **Frontend added (this pass):** Analytics/Usage view (`/analytics`, uses real `/usage`), project Analytics/Firewall/Cron/Secrets/Settings tabs, deployment promote/rollback, Roles & Permissions UI in Teams. All wired against real handlers.
 - **Done (backend):** Stages 2–12, 15 + RBAC v2 + usage metering + deployment checks + Redis + git build bridge + SMTP notify + host-port forwarder + health/version/feedback APIs + multi-node server details/heartbeat/SSH + real framework detection
-- **Remaining:** #14 frontend (paused — user wants backend-first; API doc `api.md` written for the dashboard build), #16 release docs (honest status now in PLAN/README)
+- **Remaining:** #16 release docs polish (honest status in PLAN/README is current), final v1.0.0 release tag (needs maintainer approval).
 - **Branch:** `main`, ahead of origin (delayed push)

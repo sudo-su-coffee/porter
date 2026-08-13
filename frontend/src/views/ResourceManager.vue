@@ -16,6 +16,7 @@ const busy = ref(false);
 const showCreate = ref(false);
 const query = ref("");
 const form = ref({});
+const formError = ref("");
 
 function endpoint(template, row = null) {
   return String(template || route.path).replace(/:([A-Za-z0-9_]+)/g, (_, key) => {
@@ -75,6 +76,7 @@ function valueFor(field) {
 
 function openCreate() {
   resetForm();
+  formError.value = "";
   showCreate.value = true;
 }
 
@@ -92,8 +94,16 @@ async function load() {
 
 async function create() {
   const body = {};
-  for (const field of resource.value.createFields || []) body[field.key] = valueFor(field);
+  for (const field of resource.value.createFields || []) {
+    const value = valueFor(field);
+    if (field.required !== false && value === "") {
+      formError.value = `${field.label || field.key} is required.`;
+      return;
+    }
+    body[field.key] = value;
+  }
   busy.value = true;
+  formError.value = "";
   try {
     await api(endpoint(resource.value.endpoint), { method: resource.value.createMethod || "POST", body: JSON.stringify(body) });
     toast(resource.value.createSuccess || "Resource created", "success");
@@ -145,11 +155,13 @@ onMounted(() => {
     </div>
   </header>
 
-  <div v-if="error" class="error-box">{{ error }}</div>
+  <div v-if="error" class="error-box"><span>{{ error }}</span><button class="btn btn-sm" type="button" @click="load">Retry</button></div>
   <div v-if="resource.note" class="notice-box">{{ resource.note }}</div>
+  <div v-if="resource.endpoint" class="page-sub resource-endpoint">Live endpoint: <code>{{ endpoint(resource.endpoint) }}</code></div>
 
   <section v-if="showCreate" class="card resource-create-card">
     <div class="card-title">{{ resource.createLabel || "Create resource" }}</div>
+    <div v-if="formError" class="error-box">{{ formError }}</div>
     <div class="resource-form-grid">
       <div v-for="field in resource.createFields || []" :key="field.key" class="field" :class="field.wide ? 'field-wide' : ''">
         <label :for="`resource-${field.key}`">{{ field.label }}</label>

@@ -2,13 +2,17 @@
      artifact readiness, and action-first controls with no placeholder images. -->
 <script setup>
 import { ref, onMounted, computed } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { api, uploadCustomImage } from "../api/client";
 import { toast } from "../components/toast";
 
 const router = useRouter();
+const route = useRoute();
 const images = ref([]);
 const base = ref(null);
+const baseManifest = ref(null);
+const catalogStats = ref(null);
+const selectedDetail = ref(null);
 const loading = ref(true);
 const error = ref("");
 const q = ref("");
@@ -38,9 +42,14 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [catalog, readiness] = await Promise.all([api("/images"), api("/images/base/readiness")]);
+    const search = q.value.trim();
+    const catalogEndpoint = route.meta.imageMode === "ml" ? `/images/ml${search ? `?q=${encodeURIComponent(search)}` : ""}` : route.meta.imageMode === "search" && search ? `/images/search?q=${encodeURIComponent(search)}` : "/images";
+    const [catalog, readiness, manifest, stats] = await Promise.all([api(catalogEndpoint), api("/images/base/readiness"), api("/images/base").catch(() => null), api("/images/stats")]);
     images.value = Array.isArray(catalog) ? catalog : catalog?.images || catalog?.items || [];
     base.value = readiness;
+    baseManifest.value = manifest;
+    catalogStats.value = stats;
+    if (route.params.reference) selectedDetail.value = await api(`/images/${encodeURIComponent(route.params.reference)}`).catch(() => null);
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -106,6 +115,9 @@ function deployFrom(image) {
   router.push({ name: "list" });
   toast("Image reference copied for New Project", "success");
 }
+function inspect(image) {
+  router.push({ name: "image-detail", params: { reference: image.image || image.reference || image.id } });
+}
 
 onMounted(load);
 </script>
@@ -117,11 +129,13 @@ onMounted(load);
   </div>
 
   <div v-if="error" class="error-box">{{ error }}</div>
+  <section class="resource-object-grid"><div class="stat-card"><div class="stat-label">Catalog images</div><div class="stat-value">{{ catalogStats?.images ?? images.length }}</div></div><div class="stat-card"><div class="stat-label">Artifact bytes</div><div class="stat-value">{{ catalogStats?.bytes ?? 0 }}</div></div><div class="stat-card"><div class="stat-label">Catalog mode</div><div class="stat-value">{{ route.meta.imageMode || 'all' }}</div></div></section>
 
   <section class="card image-readiness-card" :class="baseReady ? 'readiness-good' : 'readiness-warn'">
     <div><div class="card-title">Base microVM image</div><div class="page-sub">The default boot contract is a real <span class="mono">vmlinux</span> plus <span class="mono">rootfs.ext4</span> bundle. Porter never treats an OCI reference as a bootable guest.</div></div>
     <div class="readiness-status"><span class="conn-dot" :class="baseReady ? 'live' : 'down'"></span><strong>{{ baseReady ? "Ready" : "Not ready" }}</strong></div>
     <div v-if="base" class="readiness-details mono">{{ base.path || base.rootfs_path || base.image || base.reason || "Readiness data returned by the host" }}</div>
+    <pre v-if="baseManifest" class="settings-json">{{ JSON.stringify(baseManifest, null, 2) }}</pre>
   </section>
 
   <section class="card" style="margin-bottom:16px">
@@ -136,7 +150,8 @@ onMounted(load);
     <div class="detail-actions" style="margin-top:14px"><button class="btn btn-sm btn-primary" :disabled="busy" @click="uploadBundle">{{ busy ? "Uploading…" : "Register bundle" }}</button><span v-if="selectedFile" class="hint">{{ selectedFile.name }}</span></div>
   </section>
 
-  <div class="filter-bar"><input v-model="q" placeholder="Search images…" style="flex:1;max-width:320px" /><div class="seg"><button v-for="value in kinds" :key="value" :class="{ active: kind === value }" @click="kind = value">{{ value }}</button></div><span class="hint">{{ filtered.length }} image(s)</span></div>
+  <div class="filter-bar"><input v-model="q" placeholder="Search images…" style="flex:1;max-width:320px" @keyup.enter="load" /><button class="btn btn-sm" @click="load">Search catalog</button><div class="seg"><button v-for="value in kinds" :key="value" :class="{ active: kind === value }" @click="kind = value">{{ value }}</button></div><span class="hint">{{ filtered.length }} image(s)</span></div>
+  <section v-if="selectedDetail" class="card" style="margin-bottom:16px"><div class="card-head"><div class="card-title">Image detail</div><button class="btn btn-sm" @click="selectedDetail = null">Close</button></div><pre class="settings-json">{{ JSON.stringify(selectedDetail, null, 2) }}</pre></section>
 
   <div v-if="loading && !images.length" class="image-grid"><div v-for="i in 6" :key="i" class="image-card"><div class="skeleton skeleton-line" style="height:110px"></div></div></div>
   <div v-else-if="!images.length" class="empty-state"><strong>No direct images registered.</strong><span>Register a real Firecracker bundle or provision the host base image before creating a bootable project.</span></div>
@@ -147,7 +162,7 @@ onMounted(load);
       <div class="image-card-meta"><span class="image-tag">{{ image.kind || image.type || "direct" }}</span><span class="image-tag">{{ image.status || "registered" }}</span><span v-if="image.mem_mib" class="image-tag">{{ image.mem_mib }} MiB</span><span v-if="image.vcpus" class="image-tag">{{ image.vcpus }} vCPU</span></div>
       <div class="image-card-hint">{{ image.description || "Direct Firecracker boot artifact" }}</div>
       <div v-if="image.rootfs_sha256 || image.kernel_sha256" class="image-card-artifacts mono"><div v-if="image.rootfs_sha256">rootfs sha · {{ image.rootfs_sha256 }}</div><div v-if="image.kernel_sha256">kernel sha · {{ image.kernel_sha256 }}</div></div>
-      <div class="detail-actions" style="margin-top:10px"><button class="btn btn-sm" @click="copyRef(image)">Copy ref</button><button class="btn btn-sm btn-primary" @click="deployFrom(image)">Deploy</button><button v-if="image.kind === 'custom' || image.type === 'custom'" class="btn btn-sm btn-danger" :disabled="busy" @click="deleteImage(image)">Delete</button></div>
+      <div class="detail-actions" style="margin-top:10px"><button class="btn btn-sm" @click="inspect(image)">Details</button><button class="btn btn-sm" @click="copyRef(image)">Copy ref</button><button class="btn btn-sm btn-primary" @click="deployFrom(image)">Deploy</button><button v-if="image.kind === 'custom' || image.type === 'custom'" class="btn btn-sm btn-danger" :disabled="busy" @click="deleteImage(image)">Delete</button></div>
     </div>
   </div>
 </template>

@@ -19,9 +19,9 @@ const user = computed(() => (getToken() ? "operator" : ""));
 
 const navSections = [
   { label: "Operate", items: [{ name: "Deployments", to: "/", icon: "◧" }, { name: "Replicas", to: "/replicas", icon: "◌" }, { name: "Domains", to: "/domains", icon: "◉" }] },
-  { label: "Observe", items: [{ name: "Traffic", to: "/traffic", icon: "⇄" }, { name: "Analytics", to: "/analytics", icon: "◫" }, { name: "Logs", to: "/logs", icon: "≡" }, { name: "Daemon logs", to: "/daemon-logs", icon: "⌁" }] },
+  { label: "Observe", items: [{ name: "Traffic", to: "/traffic", icon: "⇄" }, { name: "Analytics", to: "/analytics", icon: "◫" }, { name: "Logs", to: "/logs", icon: "≡" }, { name: "Live events", to: "/events", icon: "✦" }, { name: "System status", to: "/system", icon: "●" }, { name: "Daemon logs", to: "/daemon-logs", icon: "⌁" }] },
   { label: "Manage", items: [{ name: "Images", to: "/images", icon: "▤" }, { name: "Servers", to: "/servers", icon: "⬒" }, { name: "Host overview", to: "/host/overview", icon: "⌂" }, { name: "Host readiness", to: "/host/prerequisites", icon: "✓" }, { name: "Runtime config", to: "/host/runtime", icon: "⌘" }] },
-  { label: "Access", items: [{ name: "Teams & RBAC", to: "/teams", icon: "⚑" }, { name: "Organizations", to: "/access/organizations", icon: "◎" }, { name: "Roles", to: "/access/roles", icon: "◇" }, { name: "API keys", to: "/access/api-keys", icon: "⌕" }, { name: "Audit log", to: "/access/audit", icon: "≣" }, { name: "Settings", to: "/settings", icon: "⚙" }] },
+  { label: "Access", items: [{ name: "Teams & RBAC", to: "/teams", icon: "⚑" }, { name: "Organizations", to: "/access/organizations", icon: "◎" }, { name: "Roles", to: "/access/roles", icon: "◇" }, { name: "API keys", to: "/access/api-keys", icon: "⌕" }, { name: "Account", to: "/account", icon: "◌" }, { name: "Feedback", to: "/feedback", icon: "✎" }, { name: "Audit log", to: "/access/audit", icon: "≣" }, { name: "Settings", to: "/settings", icon: "⚙" }] },
 ];
 
 function isActive(to) {

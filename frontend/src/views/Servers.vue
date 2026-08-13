@@ -12,6 +12,7 @@ const showRegister = ref(false);
 const newServer = ref({ name: "", address: "" });
 const newVolume = ref({ name: "", size_mib: 1024 });
 const serverSSH = ref(null);
+const serverDetails = ref({});
 const volumeUsage = ref({});
 
 async function load() {
@@ -52,6 +53,11 @@ async function heartbeat(server) {
 
 async function showSSH(server) {
   try { serverSSH.value = { server, data: await api(`/servers/${server.id}/ssh`) }; }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function inspectServer(server) {
+  try { serverDetails.value = { ...serverDetails.value, [server.id]: await api(`/servers/${encodeURIComponent(server.id)}`) }; }
   catch (e) { toast(e.message, "error"); }
 }
 
@@ -96,7 +102,7 @@ onMounted(load);
     <div class="stat-grid" v-if="overview"><div class="stat-card"><div class="stat-label">Host</div><div class="stat-value">{{ overview.host }}</div><div class="stat-sub">version {{ overview.version }}</div></div><div class="stat-card"><div class="stat-label">Running</div><div class="stat-value">{{ overview.vm_running || 0 }}</div><div class="stat-sub">of {{ overview.vm_total || 0 }} VMs</div></div><div class="stat-card"><div class="stat-label">Projects</div><div class="stat-value">{{ overview.projects || 0 }}</div></div><div class="stat-card"><div class="stat-label">Images</div><div class="stat-value">{{ overview.images || 0 }}</div></div><div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value" style="font-size:16px">{{ uptime() }}</div></div></div>
 
     <div class="page-sub" style="margin-bottom:8px">Registered servers</div><div class="filter-bar"><button class="btn btn-sm btn-primary" @click="showRegister = true">+ Register</button></div>
-    <div class="table-wrap" style="margin-bottom:22px"><table class="data-table"><thead><tr><th>Name</th><th>Address</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead><tbody><tr v-for="s in servers" :key="s.id"><td class="mono">{{ s.name }}</td><td class="mono">{{ s.address }}</td><td><span class="tag" :class="s.status === 'registered' ? 'tag-green' : 'tag-amber'">{{ s.status }}</span></td><td style="text-align:right"><button class="btn btn-sm" @click="heartbeat(s)">Heartbeat</button><button class="btn btn-sm" @click="showSSH(s)">SSH info</button><button class="icon-btn danger" title="Remove" @click="unregister(s.id)">✕</button></td></tr><tr v-if="!servers.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No hosts registered yet.</td></tr></tbody></table></div>
+    <div class="table-wrap" style="margin-bottom:22px"><table class="data-table"><thead><tr><th>Name</th><th>Address</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead><tbody><tr v-for="s in servers" :key="s.id"><td class="mono">{{ s.name }}</td><td class="mono">{{ s.address }}</td><td><span class="tag" :class="s.status === 'registered' ? 'tag-green' : 'tag-amber'">{{ s.status }}</span></td><td style="text-align:right"><button class="btn btn-sm" @click="inspectServer(s)">Details</button><button class="btn btn-sm" @click="heartbeat(s)">Heartbeat</button><button class="btn btn-sm" @click="showSSH(s)">SSH info</button><button class="icon-btn danger" title="Remove" @click="unregister(s.id)">✕</button><pre v-if="serverDetails[s.id]" class="settings-json">{{ JSON.stringify(serverDetails[s.id], null, 2) }}</pre></td></tr><tr v-if="!servers.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No hosts registered yet.</td></tr></tbody></table></div>
 
     <div class="page-sub" style="margin-bottom:8px">Storage (optional mounts)</div><div class="filter-bar"><input v-model="newVolume.name" placeholder="mount name" style="width:160px" /><input v-model.number="newVolume.size_mib" type="number" placeholder="MiB" style="width:90px" /><button class="btn btn-sm btn-primary" @click="createVolume">+ Create mount</button></div>
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Size</th><th>Path</th><th style="text-align:right">Actions</th></tr></thead><tbody><tr v-for="v in volumes" :key="v.id"><td class="mono">{{ v.name }}</td><td class="num">{{ v.size_mib }} MiB</td><td class="mono muted">{{ v.path }}</td><td style="text-align:right"><button class="btn btn-sm" @click="showVolumeUsage(v)">Usage</button><button class="btn btn-sm" @click="resizeVolume(v)">Resize</button><button class="icon-btn danger" title="Delete" @click="deleteVolume(v.id)">✕</button><div v-if="volumeUsage[v.id]" class="hint mono">{{ JSON.stringify(volumeUsage[v.id]) }}</div></td></tr><tr v-if="!volumes.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No extra mounts defined yet.</td></tr></tbody></table></div>

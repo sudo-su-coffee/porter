@@ -20,61 +20,68 @@ const execCommand = ref("");
 const execResult = ref(null);
 const health = ref(null);
 const metrics = ref([]);
+const domains = ref([]);
 const error = ref("");
 const tab = ref(route.query.tab || "overview");
-const TABS = ["overview", "health", "metrics", "logs", "traffic", "ssh"];
+const TABS = ["overview", "health", "metrics", "logs", "traffic", "domains", "ssh"];
 
 const healthy = computed(() => vm.value?.health_status === "healthy");
+const apiBase = computed(() => route.params.projectId ? `/projects/${route.params.projectId}/replicas/${props.id}` : `/vms/${props.id}`);
 
 async function load() {
   error.value = "";
   try {
-    vm.value = await api(`/vms/${props.id}`);
-    await Promise.allSettled([loadHealth(), loadMetrics(), loadLogs(), loadTraffic(), loadSSH()]);
+    vm.value = await api(apiBase.value);
+    await Promise.allSettled([loadHealth(), loadMetrics(), loadLogs(), loadTraffic(), loadSSH(), loadDomains()]);
   } catch (e) {
     error.value = e.message;
   }
 }
 async function loadLogs() {
-  logs.value = (await api(`/vms/${props.id}/logs`))?.logs || [];
+  logs.value = (await api(`${apiBase.value}/logs`))?.logs || [];
 }
 async function loadTraffic() {
-  const t = await api(`/vms/${props.id}/traffic`);
+  const t = await api(`${apiBase.value}/traffic`);
   traffic.value = Array.isArray(t) ? t : [];
 }
 async function loadSSH() {
-  sshInfo.value = await api(`/vms/${props.id}/ssh-info`);
+  sshInfo.value = await api(`${apiBase.value}/ssh-info`);
 }
 async function requestSSHCertificate() {
-  try { sshCertificate.value = await api(`/vms/${props.id}/ssh-cert`, { method: "POST" }); }
+  try { sshCertificate.value = await api(`${apiBase.value}/ssh-cert`, { method: "POST" }); }
   catch (e) { error.value = e.message; }
 }
 async function inspectConsole() {
-  try { consoleInfo.value = await api(`/vms/${props.id}/console`); }
+  try { consoleInfo.value = await api(`${apiBase.value}/console`); }
   catch (e) { error.value = e.message; }
 }
 async function execReplica() {
   const command = execCommand.value.trim();
   if (!command) return;
-  try { execResult.value = await api(`/vms/${props.id}/exec`, { method: "POST", body: JSON.stringify({ cmd: command.split(/\s+/) }) }); }
+  try { execResult.value = await api(`${apiBase.value}/exec`, { method: "POST", body: JSON.stringify({ cmd: command.split(/\s+/) }) }); }
   catch (e) { execResult.value = { status: "request error", error: e.message }; }
 }
 async function loadHealth() {
-  health.value = await api(`/vms/${props.id}/health`);
+  health.value = await api(`${apiBase.value}/health`);
 }
 async function loadMetrics() {
-  const result = await api(`/vms/${props.id}/metrics`);
+  const result = await api(`${apiBase.value}/metrics`);
   metrics.value = Array.isArray(result) ? result : result?.metrics || [];
 }
 
+async function loadDomains() {
+  const result = await api(`/vms/${props.id}/domains`);
+  domains.value = Array.isArray(result) ? result : result?.domains || [];
+}
+
 async function act(kind) {
-  await api(`/vms/${props.id}/${kind}`, { method: "POST" });
+  await api(`${apiBase.value}/${kind}`, { method: "POST" });
   load();
 }
 
 async function del() {
   if (!confirm(`Delete microVM "${vm.value.name}"?`)) return;
-  await api(`/vms/${props.id}`, { method: "DELETE" });
+  await api(apiBase.value, { method: "DELETE" });
   router.push({ name: "list" });
 }
 
@@ -187,6 +194,8 @@ onUnmounted(() => disconnectEvents());
         </table>
       </div>
     </div>
+
+    <div v-if="tab === 'domains'" class="card"><div class="card-head"><div class="card-title">Replica domains</div><button class="btn btn-sm" @click="loadDomains">Refresh</button></div><div v-if="!domains.length" class="empty-state">No domains returned for this replica.</div><pre v-else class="settings-json">{{ JSON.stringify(domains, null, 2) }}</pre></div>
 
     <div v-if="tab === 'ssh'" class="card">
       <div class="page-sub">SSH access is provided by the Porter SSH gateway — no sshd inside the guest.</div>

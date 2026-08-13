@@ -18,6 +18,7 @@ cat > "$PACKAGE_ROOT/install-porter.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 : "${PORTER_TEST_MARKER:?}"
+printf '%s\n' "${PORTER_POSTGRES_MODE:?}" > "${PORTER_TEST_MARKER}.mode"
 touch "$PORTER_TEST_MARKER"
 EOF
 chmod 0755 "$PACKAGE_ROOT/install-porter.sh"
@@ -46,10 +47,12 @@ sudo env \
   PATH="$FAKE_BIN:$PATH" \
   PORTER_CACHE_DIR="$CACHE" \
   PORTER_RELEASE_PACKAGE_SHA256="$EXPECTED" \
+  PORTER_POSTGRES_MODE=local \
   PORTER_TEST_MARKER="$MARKER" \
   PORTER_TEST_CURL_CALLS="$CALLS" \
-  bash "$INSTALLER" x86_64
+bash "$INSTALLER" x86_64
 [ -f "$MARKER" ]
+[ "$(cat "$MARKER.mode")" = local ]
 [ ! -e "$CALLS" ]
 
 rm -f "$MARKER"
@@ -59,6 +62,7 @@ sudo env \
   PORTER_CACHE_DIR="$CACHE" \
   PORTER_TEST_EXPECTED="$EXPECTED" \
   PORTER_TEST_PACKAGE="$WORK/good-package" \
+  PORTER_POSTGRES_MODE=local \
   PORTER_TEST_MARKER="$MARKER" \
   PORTER_TEST_CURL_CALLS="$CALLS" \
   bash "$INSTALLER" x86_64

@@ -17,6 +17,30 @@ can install without cloning the repository:
 curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
 ```
 
+The bootstrap pauses at the terminal and asks for the PostgreSQL mode. Enter
+`1` for local PostgreSQL on this Linux host. Enter `2` for a remote database,
+then provide the complete PostgreSQL connection URL. The answers are read from
+`/dev/tty`, so this remains interactive even though the script is supplied
+through the curl pipe.
+
+To skip the prompt, pass the variables on the privileged command itself:
+
+```bash
+# Local PostgreSQL on this host.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=local bash
+
+# Remote PostgreSQL.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=remote \
+       PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
+```
+
+In WSL Bash, do not use `set PORTER_POSTGRES_MODE=local`; that is Windows CMD
+syntax. Use the explicit `sudo PORTER_POSTGRES_MODE=local` form above. The
+selected mode and remote URL are forwarded into the extracted release
+installer, so PostgreSQL is configured once rather than prompted a second time.
+
 The script verifies the release archive, runs the PostgreSQL choice, installs
 the Go daemon and embedded dashboard, verifies Firecracker, writes `/var/porter`,
 enables systemd, and prints a readiness table. The final table separates API

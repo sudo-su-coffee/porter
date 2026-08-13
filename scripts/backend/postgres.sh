@@ -26,7 +26,18 @@ porter_pg_as_postgres() {
 
 porter_pg_install_packages() {
   command -v apt-get >/dev/null 2>&1 || porter_pg_die "PostgreSQL is missing; install it with the host package manager, then rerun"
-  [ "${PORTER_INSTALL_SYSTEM_DEPS:-0}" = 1 ] || porter_pg_die "PostgreSQL client/server is missing; install it first or set PORTER_INSTALL_SYSTEM_DEPS=1 on Debian/Ubuntu"
+  if [ "${PORTER_INSTALL_SYSTEM_DEPS:-0}" != 1 ]; then
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+      local install_deps
+      porter_pg_prompt "PostgreSQL is not installed. Install PostgreSQL server and client now? [Y/n]: " install_deps
+      case "${install_deps:-y}" in
+        y|Y|yes|YES) export PORTER_INSTALL_SYSTEM_DEPS=1 ;;
+        *) porter_pg_die "PostgreSQL is missing; install it first or rerun with PORTER_INSTALL_SYSTEM_DEPS=1" ;;
+      esac
+    else
+      porter_pg_die "PostgreSQL client/server is missing; install it first or rerun with PORTER_INSTALL_SYSTEM_DEPS=1 on Debian/Ubuntu"
+    fi
+  fi
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y postgresql postgresql-client
@@ -84,6 +95,6 @@ porter_pg_setup() {
   case "$mode" in
     local) porter_pg_setup_local ;;
     remote) porter_pg_setup_remote ;;
-    *) porter_pg_die 'set PORTER_POSTGRES_MODE=local or remote; interactive installation asks this question automatically' ;;
+    *) porter_pg_die 'set PORTER_POSTGRES_MODE=local or remote; for curl | sudo bash use sudo PORTER_POSTGRES_MODE=local bash or choose a mode when prompted' ;;
   esac
 }

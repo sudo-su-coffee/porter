@@ -153,3 +153,6 @@
 - [x] Reuse verified Firecracker and guest artifacts without repeated downloads where supported.
 - [x] Read interactive PostgreSQL selection from `/dev/tty` when the installer is piped through curl/sudo.
 - [x] Validate cache-hit, cache-miss, corrupt-cache, and installer syntax paths.
+- [x] Ask for local or remote PostgreSQL mode at the GitHub bootstrap entrypoint and forward the choice into the extracted installer.
+- [x] Ask for a remote PostgreSQL URL interactively and document the correct `sudo VAR=value bash` syntax for WSL Bash.
+- [x] Validate the interactive PostgreSQL prompt through a pseudo-terminal.

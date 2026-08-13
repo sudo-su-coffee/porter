@@ -11,7 +11,6 @@ porter.db-journal
 
 # Local config — dev.sh generates one; don't commit machine-specific secrets.
 porter.toml
-!deploy/porter.toml
 
 # Dev data (docker postgres volume if ever mounted locally)
 /.data/

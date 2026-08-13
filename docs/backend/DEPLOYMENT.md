@@ -1,22 +1,23 @@
 # Porter deploy
 
-Two entrypoints, that's it:
+The Backend workstream keeps its operational scripts in one group:
 
 ```
-deploy/
-├── install.sh      production install (Linux + KVM, run as root) — self-contained
-├── dev.sh          local dev (Docker for Postgres, real microVM boots)
-├── porter.toml     production config template
-└── README.md       this file
+scripts/backend/
+├── install.sh             production install (Linux + KVM, run as root)
+├── dev.sh                 local dev (Docker for Postgres, real microVM boots)
+├── install-firecracker.sh checksum-pinned Firecracker helper
+├── install-porter.sh      verified GitHub Release installer
+└── build-release.sh       daemon and base-image release builder
 ```
 
 ## Dev
 
 ```bash
-cd backend
-bash deploy/dev.sh up        # Docker Postgres + build + run (real boots)
-bash deploy/dev.sh down      # stop postgres (data kept)
-bash deploy/dev.sh clean     # down + remove ./bin
+cd /path/to/porter
+bash scripts/backend/dev.sh up        # Docker Postgres + build + run (real boots)
+bash scripts/backend/dev.sh down      # stop postgres (data kept)
+bash scripts/backend/dev.sh clean     # down + remove ./bin
 ```
 
 - Requires **Docker** (Postgres container) and **Go 1.25+**.
@@ -29,7 +30,7 @@ bash deploy/dev.sh clean     # down + remove ./bin
 ## Prod (single Linux + KVM host)
 
 ```bash
-sudo bash backend/deploy/install.sh      # everything, self-contained
+sudo -E bash scripts/backend/install.sh  # everything, self-contained
 /usr/local/bin/porter kernel set <path|URL>   # provision vmlinux
 systemctl start porter
 ```
@@ -41,11 +42,11 @@ Go daemon, and writes direct-runtime configuration. Config lands in the local
 installer state directory; credentials are supplied through
 `PORTER_BOOTSTRAP_ADMIN_PASSWORD` and `PORTER_SECRET_KEY`, never TOML.
 
-For a compiled release, run `release/build-release.sh` with
+For a compiled release, run `scripts/backend/build-release.sh` with
 `PORTER_BASE_IMAGE_DIR` pointing to a directory containing real `vmlinux` and
 `rootfs.ext4`. It creates a daemon package and a separate base-image package.
 Upload both assets to the Porter GitHub Release, then install with
-`install-porter.sh` and a mandatory `PORTER_RELEASE_PACKAGE_SHA256`. No AWS
+`scripts/backend/install-porter.sh` and a mandatory `PORTER_RELEASE_PACKAGE_SHA256`. No AWS
 bucket or arbitrary mirror is used.
 
 ## Where does PostgreSQL run in production?

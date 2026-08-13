@@ -2,7 +2,7 @@
 # ============================================================================
 #  Porter API smoke test — login, csrf, org, project creation.
 #
-#   bash test-porter-api.sh
+#   bash scripts/backend/api-smoke.sh
 #
 #  Assumes: go run cmd/porter/main.go server   is already running on :8080
 #  Routes are mounted at ROOT (no /api prefix) — confirmed from
@@ -11,8 +11,8 @@
 set -euo pipefail
 
 BASE="http://localhost:8080"
-ADMIN_USER="admin"
-ADMIN_PASS="change-me"
+ADMIN_USER="${PORTER_SMOKE_USER:-admin}"
+ADMIN_PASS="${PORTER_SMOKE_PASSWORD:-}"
 
 c()   { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 ok()  { printf '\033[0;32m    %s\033[0m\n' "$1"; }
@@ -30,12 +30,13 @@ c "1. GET /health"
 curl -sS "$BASE/health" | jq .
 
 # ---------------------------------------------------------------------------
-# 2. Login — POST /login (legacy alias) or POST /auth/login
-#    handleLogin isn't shown in the file you pasted, but the porter.toml
-#    comment says login returns the configured api_token as the bearer
-#    credential. We try both routes and both common response shapes.
+# 2. Login — POST /login using the migration-seeded database account.
 # ---------------------------------------------------------------------------
-c "2. POST /login  (admin / change-me)"
+if [ -z "$ADMIN_PASS" ]; then
+  read -r -s -p "Database-seeded Porter password for ${ADMIN_USER}: " ADMIN_PASS
+  printf '\n'
+fi
+c "2. POST /login  (${ADMIN_USER})"
 LOGIN_RESP=$(curl -sS -X POST "$BASE/login" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}")
@@ -46,10 +47,7 @@ TOKEN=$(echo "$LOGIN_RESP" | jq -r '.token // .api_token // .access_token // emp
 
 if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
   warn "login response didn't contain an obvious token field."
-  warn "Falling back to the static api_token from porter.toml directly —"
-  warn "this is what a.auth() actually checks against (a.token), so it will work"
-  warn "for testing even if handleLogin's response shape is different than guessed."
-  read -r -p "    paste your porter.toml [server].api_token value: " TOKEN
+  warn "No configuration-token fallback exists; inspect the database-backed login response."
 fi
 
 if [ -z "$TOKEN" ]; then
@@ -98,10 +96,10 @@ curl -sS "${AUTH[@]}" "$BASE/orgs/current" | jq .
 #    This will actually attempt to boot a real replica through your VM
 #    engine, so watch the `go run` server's stdout for boot logs/errors.
 # ---------------------------------------------------------------------------
-c "6. POST /projects  (create test-nginx, 1 replica, OCI image)"
+c "6. POST /projects  (create direct-artifact project, 1 replica)"
 PROJECT_RESP=$(curl -sS -X POST "${AUTH_MUT[@]}" "$BASE/projects" -d '{
-  "name": "test-nginx",
-  "image": "docker.io/library/nginx:alpine",
+  "name": "smoke-direct-artifact",
+  "image": "base://default",
   "replicas": 1,
   "vcpus": 1,
   "mem_mib": 256,

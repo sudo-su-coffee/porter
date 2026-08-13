@@ -3,7 +3,8 @@
 # A release is intentionally refused unless a real base image is supplied.
 set -euo pipefail
 
-BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../backend" && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BACKEND_DIR="$REPO_DIR/backend"
 REPOSITORY="${PORTER_GITHUB_REPOSITORY:-sudo-su-coffee/porter}"
 RELEASE_TAG="${1:-${PORTER_RELEASE_TAG:-v1.0.0-beta-dev}}"
 ARCH="${2:-$(uname -m)}"
@@ -26,10 +27,10 @@ esac
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/base-images/default" "$DIST_DIR/release"
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go -C "$BACKEND_DIR" build -trimpath -ldflags "-s -w -X main.Version=$RELEASE_TAG" -o "$DIST_DIR/porter" ./cmd/porter
-install -m 0755 "$BACKEND_DIR/install-porter.sh" "$DIST_DIR/install-porter.sh"
-install -m 0755 "$BACKEND_DIR/install-firecracker.sh" "$DIST_DIR/install-firecracker.sh"
-install -m 0644 "$BACKEND_DIR/FIRECRACKER_ARTIFACTS.md" "$DIST_DIR/FIRECRACKER_ARTIFACTS.md"
-install -m 0644 "$BACKEND_DIR/release/firecracker-versions.json" "$DIST_DIR/release/firecracker-versions.json"
+install -m 0755 "$REPO_DIR/scripts/backend/install-porter.sh" "$DIST_DIR/install-porter.sh"
+install -m 0755 "$REPO_DIR/scripts/backend/install-firecracker.sh" "$DIST_DIR/install-firecracker.sh"
+install -m 0644 "$REPO_DIR/docs/backend/FIRECRACKER_ARTIFACTS.md" "$DIST_DIR/FIRECRACKER_ARTIFACTS.md"
+install -m 0644 "$REPO_DIR/release/firecracker-versions.json" "$DIST_DIR/release/firecracker-versions.json"
 install -m 0644 "$BASE_IMAGE_DIR/vmlinux" "$DIST_DIR/base-images/default/vmlinux"
 install -m 0644 "$BASE_IMAGE_DIR/rootfs.ext4" "$DIST_DIR/base-images/default/rootfs.ext4"
 

@@ -1,4 +1,5 @@
 # Porter backend
+# Porter Backend
 
 This directory contains the Go control plane, PostgreSQL store, direct
 Firecracker runtime, embedded migrations, and the built Vue dashboard.
@@ -26,6 +27,18 @@ OCI runtime, a Docker socket, or CNI plugins.
 
 The Go entrypoint is `cmd/porter/main.go`. The embedded frontend is built into
 `web/dist` before the backend binary is compiled.
+
+## Documentation index
+
+| Document | Purpose |
+|---|---|
+| [`API_REFERENCE.md`](API_REFERENCE.md) | REST, authentication, resources, RBAC, and stream contracts |
+| [`DIRECT_FIRECRACKER.md`](DIRECT_FIRECRACKER.md) | Direct Firecracker and Unix-socket runtime boundary |
+| [`FIRECRACKER_ARTIFACTS.md`](FIRECRACKER_ARTIFACTS.md) | Kernel/rootfs artifacts, checksums, storage, and installation |
+| [`PAGE_API_MATRIX.md`](PAGE_API_MATRIX.md) | Canonical 39-surface API/page matrix |
+| [`PAGE_API_GAP_AUDIT.md`](PAGE_API_GAP_AUDIT.md) | Latest missing-page and endpoint audit |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Development and host setup guidance |
+| [`RELEASE_AUDIT_BETA_DEV.md`](RELEASE_AUDIT_BETA_DEV.md) | Beta-dev readiness and known limitations |
 
 ## Database-seeded RBAC
 
@@ -58,16 +71,16 @@ state paths and exposed through `/images/base` and `/images/base/readiness`.
 
 The large guest artifacts do not belong in Git source history. Operators store
 them in the Porter state directory or upload the separate base-image package to
-a Porter GitHub Release. See [`../FIRECRACKER_ARTIFACTS.md`](../FIRECRACKER_ARTIFACTS.md)
-and [`../release/GITHUB_ARTIFACTS.md`](../release/GITHUB_ARTIFACTS.md).
+a Porter GitHub Release. See [`FIRECRACKER_ARTIFACTS.md`](FIRECRACKER_ARTIFACTS.md)
+and [`GITHUB_ARTIFACTS.md`](GITHUB_ARTIFACTS.md).
 
 ## Firecracker distribution
 
-`../release/firecracker-versions.json` pins official Firecracker releases and
-SHA-256 values. `../install-firecracker.sh` is local-first, GitHub-only for
-remote downloads, verifies every archive before extraction, and fails closed on
-missing or mismatched digests. `../release/build-release.sh` creates a compiled
-Porter package and a separate verified base-image package.
+`../../release/firecracker-versions.json` pins official Firecracker releases and
+SHA-256 values. `../../scripts/backend/install-firecracker.sh` is local-first,
+GitHub-only for remote downloads, verifies every archive before extraction, and
+fails closed on missing or mismatched digests. `../../scripts/backend/build-release.sh`
+creates a compiled Porter package and a separate verified base-image package.
 
 The installer never downloads an artifact during VM boot. The runtime uses only
 local paths and refuses to boot when host prerequisites or artifact validation
@@ -113,15 +126,21 @@ containerd/OCI booting.
 ## Development
 
 ```bash
+cd ../../backend
 go test ./...
 go vet ./...
 go build ./cmd/porter
+cd ..
+
+# From the repository root:
+bash scripts/backend/dev.sh up
+bash scripts/backend/api-smoke.sh
 ```
 
 Build the dashboard before embedding it:
 
 ```bash
-cd ../frontend
+cd ../../frontend
 npm ci
 npm run build
 cd ../backend

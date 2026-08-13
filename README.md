@@ -84,9 +84,12 @@ The installer caches verified release archives in `/var/cache/porter/releases`
 and only downloads again when the archive is missing or its SHA-256 does not
 match. PostgreSQL prompts use `/dev/tty` when the script is piped through curl.
 
-The Linux installer does not use Docker. It offers local host PostgreSQL (with
-optional Debian/Ubuntu package installation using `PORTER_INSTALL_SYSTEM_DEPS=1`)
-or a verified remote `PORTER_DATABASE_URL`. The editable non-secret runtime
+The Linux installer does not use Docker. It offers local host PostgreSQL and
+automatically installs the current stable upstream PostgreSQL server/client
+packages from the official PGDG repository with `--no-install-recommends`, or a verified remote
+`PORTER_DATABASE_URL`. Local mode creates only Porter’s dedicated `porter`
+application role and `porter` database with no superuser or role-creation
+privileges. The editable non-secret runtime
 configuration is `/var/porter/porter.toml`; database credentials and key material
 are kept in `/var/porter/porter.env`. Authorization is database-seeded RBAC only;
 the bootstrap password initializes the persisted account and is not an

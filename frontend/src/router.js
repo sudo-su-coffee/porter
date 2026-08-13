@@ -25,6 +25,9 @@ import ProjectEnvVars from "./views/ProjectEnvVars.vue";
 import ProjectMembers from "./views/ProjectMembers.vue";
 import ProjectSettingsPage from "./views/ProjectSettingsPage.vue";
 import ProjectDomains from "./views/ProjectDomains.vue";
+import ProjectSourceRuntime from "./views/ProjectSourceRuntime.vue";
+import Feedback from "./views/Feedback.vue";
+import NewProject from "./views/NewProject.vue";
 import ProjectAnalytics from "./components/ProjectAnalytics.vue";
 import ProjectCron from "./components/ProjectCron.vue";
 import ProjectFirewall from "./components/ProjectFirewall.vue";
@@ -34,11 +37,14 @@ const resource = (title, description, endpoint, extra = {}) => ({ resource: { ti
 
 const routes = [
   { path: "/", name: "list", component: DeploymentsList },
+  { path: "/projects/new", name: "new-project", component: NewProject },
   { path: "/analytics", name: "analytics", component: Analytics },
   { path: "/projects/:id", name: "project", component: ProjectDetail, props: true },
   { path: "/projects/:projectId/deployments/:deploymentId", name: "deployment", component: DeploymentDetail },
   { path: "/projects/:projectId/builds/:buildId/logs", name: "build-logs", component: LiveLogStream, meta: { streamTitle: "Build logs", streamEndpoint: "/projects/:projectId/builds/:buildId/logs/stream", back: "/projects/:projectId/builds" } },
   { path: "/projects/:projectId/builds", name: "project-builds", component: Builds },
+  { path: "/projects/:projectId/source", name: "project-source", component: ProjectSourceRuntime },
+  { path: "/projects/:projectId/compose", name: "project-compose", component: ProjectSourceRuntime, meta: { sourceTab: "compose" } },
   { path: "/projects/:projectId/deployments", name: "project-deployments", component: ResourceManager, meta: resource("Deployments", "Deployment history and rollout state from the control plane.", "/projects/:projectId/deployments") },
   { path: "/projects/:projectId/services", name: "project-services", component: ResourceManager, meta: resource("Services", "Service and replica topology for this project.", "/projects/:projectId/services", { rowActions: [{ label: "Scale", endpoint: "/projects/:projectId/services/:name/scale", prompt: "Desired replica count", promptDefault: "1", body: (_row, value) => ({ replicas: Number(value) }), success: "Service scale requested" }] }) },
   { path: "/projects/:projectId/domains", name: "project-domains", component: ProjectDomains },
@@ -62,11 +68,11 @@ const routes = [
   { path: "/projects/:projectId/logs", name: "project-logs", component: LiveLogStream, meta: { streamTitle: "Application logs", streamEndpoint: "/projects/:projectId/logs/stream", back: "/projects/:projectId" } },
   { path: "/projects/:projectId/settings/general", name: "project-general-settings", component: ProjectSettingsPage, meta: { settingsSection: "general", settingsTitle: "General project settings" } },
   { path: "/projects/:projectId/settings/build", name: "project-build-settings", component: ProjectSettingsPage, meta: { settingsSection: "build", settingsTitle: "Build settings" } },
-  { path: "/projects/:projectId/settings/git", name: "project-git-settings", component: ProjectSettingsPage, meta: { settingsSection: "git", settingsTitle: "Git settings" } },
+  { path: "/projects/:projectId/settings/git", name: "project-git-settings", component: ProjectSettingsPage, meta: { settingsSection: "git", settingsTitle: "Git settings", settingsActions: [{ label: "Sync repository", endpoint: "/projects/:projectId/settings/git/sync", method: "POST", confirm: "Sync this repository now?", success: "Repository sync requested" }, { label: "Set ignore command", endpoint: "/projects/:projectId/settings/ignore-command", method: "POST", prompt: "Ignore command", promptDefault: "", body: (value) => ({ command: value }), success: "Ignore command saved" }, { label: "Apply Git toggles", endpoint: "/projects/:projectId/settings/git/toggles", method: "PATCH", body: (_value, current) => current, success: "Git toggles saved" }] } },
   { path: "/projects/:projectId/settings/functions", name: "project-functions", component: ProjectSettingsPage, meta: { settingsSection: "functions", settingsTitle: "Functions settings" } },
   { path: "/projects/:projectId/settings/security", name: "project-security", component: ProjectSettingsPage, meta: { settingsSection: "security", settingsTitle: "Security settings" } },
   { path: "/projects/:projectId/settings/networking", name: "project-networking-settings", component: ProjectSettingsPage, meta: { settingsSection: "networking", settingsTitle: "Networking settings" } },
-  { path: "/projects/:projectId/settings/checks", name: "project-check-settings", component: ProjectSettingsPage, meta: { settingsSection: "checks", settingsTitle: "Deployment checks" } },
+  { path: "/projects/:projectId/settings/checks", name: "project-check-settings", component: ProjectSettingsPage, meta: { settingsSection: "checks", settingsTitle: "Deployment checks", settingsMethod: "POST" } },
   { path: "/projects/:projectId/settings/rollout", name: "project-rollout-settings", component: ProjectSettingsPage, meta: { settingsSection: "rollout", settingsTitle: "Rollout settings" } },
   { path: "/projects/:projectId/settings/build-machine", name: "project-build-machine", component: ProjectSettingsPage, meta: { settingsSection: "build-machine", settingsTitle: "Build machine" } },
   { path: "/projects/:projectId/settings/deployment-protection", name: "project-deployment-protection", component: ProjectSettingsPage, meta: { settingsSection: "deployment-protection", settingsTitle: "Deployment protection" } },
@@ -75,6 +81,8 @@ const routes = [
   { path: "/projects/:projectId/settings/advanced", name: "project-advanced-settings", component: ProjectSettingsPage, meta: { settingsSection: "advanced", settingsTitle: "Advanced settings" } },
   { path: "/projects/:projectId/settings/passport", name: "project-passport", component: ProjectSettingsPage, meta: { settingsSection: "passport", settingsTitle: "Passport settings" } },
   { path: "/projects/:projectId/settings/microfrontends", name: "project-microfrontends", component: ProjectSettingsPage, meta: { settingsSection: "microfrontends", settingsTitle: "Microfrontends settings" } },
+  { path: "/projects/:projectId/settings/framework", name: "project-framework", component: ProjectSettingsPage, meta: { settingsSection: "framework", settingsTitle: "Detected framework", settingsReadOnly: true } },
+  { path: "/projects/:projectId/settings/git/lfs", name: "project-git-lfs", component: ProjectSettingsPage, meta: { settingsSection: "git/lfs", settingsTitle: "Git LFS settings" } },
   { path: "/vms/:id", name: "vm", component: VmDetail, props: true },
   { path: "/vms/:id/logs", name: "vm-logs", component: LiveLogStream, meta: { streamTitle: "Replica logs", streamEndpoint: "/vms/:id/logs/stream", back: "/vms/:id" } },
   { path: "/vms/:id/health", name: "vm-health", component: ReplicaStream, meta: { stream: "health" } },
@@ -85,12 +93,14 @@ const routes = [
   { path: "/domains", name: "domains", component: Domains },
   { path: "/teams", name: "teams", component: Teams },
   { path: "/settings", name: "settings", component: Settings },
+  { path: "/feedback", name: "feedback", component: Feedback },
   { path: "/images", name: "images", component: Images },
   { path: "/servers", name: "servers", component: Servers },
   { path: "/logs", name: "logs", component: Logs },
   { path: "/replicas", name: "replicas", component: ResourceManager, meta: resource("All replicas", "Global replica inventory across projects.", "/replicas", { back: false }) },
   { path: "/host/overview", name: "host-overview", component: ResourceManager, meta: resource("Host overview", "Host capacity and runtime state.", "/host/overview", { back: false }) },
   { path: "/host/prerequisites", name: "host-prerequisites", component: ResourceManager, meta: resource("Host readiness", "KVM, TAP, Firecracker, and artifact readiness checks.", "/host/prerequisites", { back: false }) },
+  { path: "/host/kernel", name: "host-kernel", component: ResourceManager, meta: resource("Host kernel", "Kernel, architecture, and direct Firecracker host details.", "/host/kernel", { back: false }) },
   { path: "/host/runtime", name: "host-runtime", component: ResourceManager, meta: resource("Runtime configuration", "Direct Firecracker runtime configuration and state paths.", "/host/runtime", { back: false }) },
   { path: "/host/ports", name: "host-ports", component: ResourceManager, meta: resource("Host ports", "Host-to-guest port forwarding state.", "/host/ports", { back: false }) },
   { path: "/daemon-logs", name: "daemon-logs", component: ResourceManager, meta: resource("Daemon logs", "Control-plane operational log history.", "/logs", { back: false }) },
@@ -101,6 +111,7 @@ const routes = [
   { path: "/access/roles", name: "access-roles", component: Teams, meta: { accessTab: "roles" } },
   { path: "/access/permissions", name: "access-permissions", component: Teams, meta: { accessTab: "roles" } },
   { path: "/access/audit", name: "access-audit", component: Teams, meta: { accessTab: "orgs" } },
+  { path: "/access/events", name: "access-events", component: Teams, meta: { accessTab: "events" } },
   { path: "/access/api-keys", name: "access-api-keys", component: Teams, meta: { accessTab: "apikeys" } },
   { path: "/login", name: "login", component: Login },
 ];

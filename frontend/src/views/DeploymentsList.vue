@@ -144,6 +144,7 @@ onUnmounted(() => disconnectEvents());
       <h1>Ship a healthy microVM, not a fragile pile of runtime glue.</h1>
       <p>Choose a direct image, bring your own Firecracker bundle, or open an existing project to watch its replica pool settle.</p>
       <div class="command-actions">
+        <button class="btn btn-primary" @click="router.push({ name: 'new-project' })">New project</button>
         <button class="btn btn-primary" @click="router.push({ name: 'images' })">Browse direct images</button>
         <button class="btn" @click="load">Refresh host</button>
       </div>

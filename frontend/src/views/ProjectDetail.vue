@@ -48,7 +48,11 @@ const auxiliaryRoutes = [
   ["project-firewall", "Firewall", "Inbound/outbound policy rules"],
   ["project-networks", "Networks", "TAP and project network allocations"],
   ["project-members", "Project members", "Scoped member roles"],
+  ["project-source", "Source & runtime", "Compose, scaling, healthchecks, and autoscale"],
+  ["project-env-vars", "Environment variables", "Runtime configuration values"],
+  ["project-domains", "Project domains", "Verification and DNS records"],
   ["project-git-settings", "Git settings", "Repository and branch provenance"],
+  ["project-framework", "Framework detection", "Backend-detected source framework"],
 ];
 
 async function load() {

@@ -43,6 +43,28 @@ async function startBuild() {
   }
 }
 
+async function importSource() {
+  if (!form.value.git_url.trim()) return;
+  busy.value = true;
+  try {
+    await api(`/projects/${projectId()}/git/import`, { method: "POST", body: JSON.stringify({ git_url: form.value.git_url.trim(), branch: form.value.branch || "main" }) });
+    toast("Git import queued", "success");
+    await load();
+  } catch (e) { toast(e.message, "error"); }
+  finally { busy.value = false; }
+}
+
+async function deployFromGit() {
+  if (!form.value.git_url.trim()) return;
+  busy.value = true;
+  try {
+    await api(`/projects/${projectId()}/deployments/git`, { method: "POST", body: JSON.stringify({ repository: form.value.git_url.trim(), branch: form.value.branch || "main" }) });
+    toast("Git deployment queued", "success");
+    await load();
+  } catch (e) { toast(e.message, "error"); }
+  finally { busy.value = false; }
+}
+
 onMounted(load);
 </script>
 
@@ -53,7 +75,7 @@ onMounted(load);
   <section class="card build-source-card">
     <div class="card-title">Start a source build</div>
     <div class="page-sub">The current direct-only builder accepts repositories that contain a verified <span class="mono">vmlinux</span> and <span class="mono">rootfs.ext4</span> at the root or under <span class="mono">.porter/</span>. Dockerfile-to-guest conversion is not reported as ready until its BuildKit and guest-conversion workers are configured.</div>
-    <div class="filter-bar"><input v-model="form.git_url" placeholder="https://github.com/owner/repository.git" /><select v-model="form.branch"><option v-for="branch in (branches.length ? branches : ['main'])" :key="branch" :value="branch">{{ branch }}</option></select><button class="btn btn-sm btn-primary" :disabled="busy" @click="startBuild">{{ busy ? 'Queueing…' : 'Build source' }}</button></div>
+    <div class="filter-bar"><input v-model="form.git_url" placeholder="https://github.com/owner/repository.git" /><select v-model="form.branch"><option v-for="branch in (branches.length ? branches : ['main'])" :key="branch" :value="branch">{{ branch }}</option></select><button class="btn btn-sm btn-primary" :disabled="busy" @click="startBuild">{{ busy ? 'Queueing…' : 'Build source' }}</button><button class="btn btn-sm" :disabled="busy" @click="importSource">Import source</button><button class="btn btn-sm" :disabled="busy" @click="deployFromGit">Deploy from Git</button></div>
   </section>
   <p v-if="loading" class="page-sub">Loading build history…</p>
   <div v-else class="table-wrap"><table class="data-table"><thead><tr><th>Status</th><th>Source</th><th>Branch</th><th>Image/artifact</th><th>Actions</th></tr></thead><tbody><tr v-for="build in builds" :key="build.id"><td><span class="tag" :class="build.build_status === 'ready' ? 'tag-green' : build.build_status === 'failed' ? 'tag-red' : 'tag-accent'">{{ build.build_status }}</span></td><td class="mono">{{ build.git_url || '—' }}</td><td class="mono">{{ build.branch || 'main' }}</td><td class="mono">{{ build.image || 'pending' }}</td><td><button class="btn btn-sm" @click="router.push({ name: 'build-logs', params: { projectId: projectId(), buildId: build.id } })">Live logs</button></td></tr><tr v-if="!builds.length"><td colspan="5" class="hint" style="text-align:center;padding:20px">No source builds yet.</td></tr></tbody></table></div>

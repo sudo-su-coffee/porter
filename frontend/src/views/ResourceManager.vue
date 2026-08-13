@@ -118,9 +118,14 @@ async function create() {
 
 async function invoke(action, row) {
   if (action.confirm && !confirm(action.confirm.replace("{name}", row?.name || row?.id || "this resource"))) return;
+  let promptValue;
+  if (action.prompt) {
+    promptValue = prompt(action.prompt, action.promptDefault ?? "");
+    if (promptValue === null) return;
+  }
   busy.value = true;
   try {
-    const body = typeof action.body === "function" ? action.body(row) : action.body;
+    const body = typeof action.body === "function" ? action.body(row, promptValue) : action.body;
     await api(endpoint(action.endpoint, row), { method: action.method || "POST", body: body ? JSON.stringify(body) : undefined });
     toast(action.success || "Action completed", "success");
     await load();
@@ -187,6 +192,9 @@ onMounted(() => {
     </div>
     <div v-if="objectEntries.length" class="resource-object-grid">
       <div v-for="([key, value]) in objectEntries" :key="key" class="stat-card"><div class="stat-label">{{ key.replaceAll("_", " ") }}</div><div class="stat-value mono">{{ format(value) }}</div></div>
+    </div>
+    <div v-if="objectEntries.length && resource.objectActions?.length" class="detail-actions" style="margin-bottom:16px">
+      <button v-for="action in resource.objectActions" :key="action.label" class="btn btn-sm" :class="action.danger ? 'btn-danger' : ''" :disabled="busy" type="button" @click="invoke(action, data)">{{ action.label }}</button>
     </div>
     <div v-if="rows.length" class="table-wrap">
       <table class="data-table">

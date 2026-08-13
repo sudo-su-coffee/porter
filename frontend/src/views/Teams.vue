@@ -1,8 +1,10 @@
 <script setup>
 import { computed, ref, onMounted } from "vue";
+import { useRoute } from "vue-router";
 import { api, getOrgId, setOrgId } from "../api/client";
 
-const tab = ref("orgs");
+const route = useRoute();
+const tab = ref(route.meta.accessTab || "orgs");
 const error = ref("");
 const orgs = ref([]);
 const groups = ref([]);

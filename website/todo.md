@@ -1,0 +1,198 @@
+# Repository review checklist
+
+- [x] Inspect the public repository tree, README, branches, and current commit metadata.
+- [x] Identify the current runtime model, API surface, frontend structure, deployment assumptions, and dependency set.
+- [x] Compare the repository implementation against the supplied Porter README, raw Firecracker plan, API sample, and Go modules.
+- [x] Record concrete migration risks, broken or stale assumptions, and reusable packages/modules.
+- [x] Recommend whether to preserve, refactor, or replace major areas before cloning or integrating.
+- [x] Report findings and ask for approval before making repository or project changes.
+- [x] Clone or inspect the public repository locally without pushing changes upstream.
+- [x] Compare old runtime, API, storage, networking, and frontend paths against the approved plan.
+- [x] Preserve useful existing modules and define replacement boundaries for stale architecture.
+- [x] Apply the first safe migration slice inside the cloned repository after the baseline review.
+- [x] Replace the scaffold Example Page with the real Porter marketing homepage.
+- [x] Wire the Harbor Glass typography, color system, glass panels, hero, product flow, and CTAs.
+- [x] Verify the marketing homepage at desktop and mobile viewports before backend work resumes.
+- [x] Re-establish the cloned old-repository baseline and choose the next migration slice.
+- [x] Apply the safe backend runtime-boundary migration inside the old repository clone.
+- [x] Create a detailed Getting Started documentation page for Porter.
+- [x] Link Getting Started from the marketing site’s primary navigation and verify the route.
+- [x] Validate the backend diff and documentation UX, then save the updated marketing checkpoint.
+- [x] Define the SaaS-ready product narrative, plan tiers, and honest “available vs planned” claims.
+- [x] Add a detailed Getting Started documentation page and link it from the main navigation.
+- [x] Expand the homepage with product capabilities, SaaS value, plan framing, and stronger conversion paths.
+- [x] Verify the improved marketing site on desktop and mobile before returning to backend migration.
+- [x] Rewrite the homepage hook around the visitor’s first deploy problem and next action.
+- [x] Make the primary CTA move users directly into the first-deploy path.
+- [x] Rewrite Getting Started for scanability, prerequisites, copy-paste commands, and first-success validation.
+- [x] Verify the revised homepage and docs page on desktop and mobile, then save a checkpoint.
+- [x] Define concise human-first Porter voice and robust product hierarchy.
+- [x] Rewrite homepage and docs copy with fewer, clearer, more confident messages.
+- [x] Strengthen visual proof, section contrast, and conversion moments without adding clutter.
+- [x] Verify the refined Apple-inspired experience across desktop and mobile, then save a checkpoint.
+- [x] Reduce the top navigation to essential links and one clear primary action.
+- [x] Remove the unwanted hero path and supporting microcopy.
+- [x] Rebuild How It Works into a more useful, visually progressive product explanation.
+- [x] Verify the streamlined homepage on desktop and mobile, then save a checkpoint.
+- [x] Define the Mintlify-style docs information architecture and active sidebar behavior.
+- [x] Implement the persistent docs shell with grouped navigation and a readable content column.
+- [x] Refine code blocks, mobile docs navigation, and active section cues.
+- [x] Verify the docs page on desktop and mobile, then save a checkpoint.
+- [x] Remove the marketing-style hero from Getting Started while preserving the Mintlify docs shell.
+- [x] Move the first-deploy and host-to-healthy emphasis into the homepage hero area.
+- [x] Verify the streamlined docs and homepage layouts, then save a checkpoint.
+- [x] Remove the host, control plane, and healthy replica labels from the docs route rail.
+- [x] Verify the cleaned docs page on desktop and mobile, then save a checkpoint.
+- [x] Audit and finalize SEO metadata, social previews, canonical URLs, robots, and sitemap.
+- [x] Add transparent traffic analytics instrumentation and optional GA4 measurement-ID support.
+- [x] Run final accessibility, routing, desktop/mobile, and build-quality checks.
+- [x] Save the final checkpoint and package the finished project as a ZIP.
+- [x] Audit the cloned Porter backend and confirm the direct Firecracker Unix-socket boundary.
+- [x] Implement direct Firecracker API client and boot primitives inside `porter-old/backend` only.
+- [x] Remove containerd dependencies from the backend runtime path and preserve non-backend files.
+- [x] Run focused Go tests and document host-level KVM validation requirements.
+- [ ] Reconcile checklist status against the actual Porter backend and marketing repositories.
+- [x] Audit `porter-old/backend/internal/api/api.go`, handlers, and route registration for full Porter API coverage.
+- [x] Clone and inspect the public Whatomate repository, using frontend patterns only and excluding WhatsApp-specific coupling.
+- [x] Map Whatomate frontend modules to Porter dashboard/API concepts before adapting code.
+- [x] Complete remaining Porter backend API and supporting module gaps inside `porter-old/backend`.
+- [x] Adapt the reusable Whatomate frontend structure into the Porter frontend project.
+- [x] Verify API coverage, frontend integration, and absence of WhatsApp-specific dependencies.
+- [x] Use Whatomate’s Vue workspace form as Porter’s frontend adaptation source.
+- [x] Replace WhatsApp navigation, stores, types, and views with Porter dashboard concepts.
+- [x] Preserve the Whatomate sidebar, auth, responsive shell, tables, filters, and settings patterns.
+- [x] Compare every `api.go` route registration with its declared handler and route-permission entry.
+- [x] Identify plan-critical endpoint gaps for direct Firecracker lifecycle, replicas, images, networking, observability, domains, access, and host readiness.
+- [x] Register and permission-map the necessary missing endpoints without adding containerd or OCI runtime behavior.
+- [x] Run `go test ./...`, `go vet ./...`, and a final handler/route/permission coverage scan.
+- [x] Audit the current Porter Vue dashboard against the completed backend API contract.
+- [x] Define the deployment-focused Porter workspace UX, navigation, responsive behavior, and empty/loading/error states.
+- [x] Complete the Vue dashboard views for deployments, projects, replicas, images, observability, domains, teams, servers, and host runtime readiness.
+- [x] Connect the high-value dashboard flows to real Porter endpoints without WhatsApp-specific dependencies.
+- [x] Verify responsive builds, route behavior, API boundaries, and production output.
+- [x] Package the complete Porter Vue frontend as a standalone ZIP without pushing backend or frontend changes upstream.
+- [x] Finish the interrupted `api.go` audit and reconcile all route, handler, and RBAC entries.
+- [x] Verify newly added host prerequisite/runtime endpoints and document direct Firecracker limitations.
+- [x] Complete the full Vue frontend implementation and final ZIP delivery after the API audit.
+- [x] Audit every Firecracker process, Unix-socket, request-shape, and lifecycle reference across `porter-old/backend`.
+- [x] Keep all direct Firecracker `.sock` ownership and client lifecycle code under the backend runtime package.
+- [x] Remove or isolate any duplicate Firecracker socket logic outside runtime without reintroducing containerd or OCI dependencies.
+- [x] Add focused runtime/package-boundary tests and verify direct-only source scans.
+- [ ] Inventory every Porter Vue page, nested flow, action, and empty/loading/error state for v1.0.0-beta-dev.
+- [ ] Audit deployment, project, deployment-history, VM/replica, health, metrics, logs, traffic, SSH, images, domains, analytics, volumes, servers, settings, organization, team, roles, users, and API-key flows.
+- [ ] Audit all backend routes against frontend flows, TOML configuration fields, and database migration tables.
+- [ ] Compare the implemented dashboard coverage with Vercel/Coolify-style PaaS product surfaces and identify missing high-value pages.
+- [ ] Preview-test every safe frontend route and validate start/stop/restart/delete/scale/SSH boundaries without requiring privileged KVM access.
+- [ ] Prepare a v1.0.0-beta-dev readiness report and updated frontend/backend ZIPs without pushing to GitHub.
+- [ ] Define the complete 30–50-view Porter v1.0.0-beta-dev information architecture from real backend resources.
+- [ ] Audit VM/app stream logs, build logs, deployment logs, persistence, non-persistence, volumes, networking, images, and host operations.
+- [ ] Audit project/environment/deployment/release/replica/serverless-style flows against real API contracts.
+- [ ] Audit organization, team, member, role, permission, API-key, security, domain, TLS, and audit-event flows.
+- [ ] Implement missing views only where backend persistence and handlers are real; explicitly label unsupported guest-agent or artifact behavior.
+- [ ] Validate every new view with production-build checks, route checks, safe preview checks, and direct Firecracker lifecycle boundaries.
+- [ ] Remove hardcoded admin authorization fallbacks from backend request context and permission checks.
+- [ ] Remove admin credentials and privileged identity configuration from TOML and the installer.
+- [ ] Seed the initial admin user, roles, permissions, and bootstrap credential flow through database migrations only.
+- [ ] Make login, API keys, org/team membership, and route RBAC resolve exclusively from persisted database state.
+- [ ] Add explicit unauthorized/forbidden tests and update the Vue Teams/Roles/Users/API-key experience.
+- [ ] Freeze the integrated v1.0.0-beta-dev release scope across backend, frontend, migrations, TOML, and runtime artifacts.
+- [ ] Complete DB-only seeded RBAC and remove every hardcoded/config-admin authorization fallback.
+- [ ] Complete real backend and frontend flow coverage, including logs, persistence, images, deployment history, replicas, orgs, teams, and security.
+- [ ] Run integrated validation and produce clean review/push-ready ZIPs without pushing upstream.
+- [ ] Define the canonical base microVM image contract: `vmlinux` plus `rootfs.ext4`, metadata, version, architecture, and digest.
+- [ ] Define host storage paths, ownership, permissions, and lifecycle for base and derived image artifacts.
+- [ ] Register and validate base images through the backend rather than treating Docker/OCI references as bootable.
+- [ ] Make project creation/deployment resolve a real base or custom image manifest before Firecracker boot.
+- [ ] Add image readiness, artifact provenance, and safe upload/activation states to the Vue dashboard.
+- [ ] Test image migration, artifact validation, direct boot prerequisites, and release documentation.
+- [x] Define where Firecracker binaries, kernels, and base rootfs artifacts live during install and runtime.
+- [x] Add root-level stable/fallback Firecracker version manifest and checksum metadata.
+- [x] Update `deploy/install.sh` to use local artifacts first, then verified remote downloads, with safe fallback behavior.
+- [x] Ensure boot-time TOML paths point at the installed state directory and never depend on a remote URL during VM boot.
+- [x] Document base-image creation, artifact ownership, offline installs, upgrades, and checksum failure recovery.
+- [x] Define a GitHub Releases-only distribution contract for the compiled Porter Go daemon, official Firecracker binaries, and real `vmlinux`/`rootfs.ext4` base-image bundles.
+- [x] Publish or stage a release manifest that maps each artifact to a GitHub URL, architecture, version, size, and SHA-256 digest, with no AWS/object-storage dependency.
+- [x] Make the installer download only from the configured GitHub release URLs, verify every archive before extraction, and fail closed on missing or mismatched checksums.
+- [x] Ensure the compiled Go daemon release package includes the direct Firecracker installer, artifact manifest, and operator documentation while keeping guest artifacts separate from the daemon binary.
+- [x] Validate that no installer, TOML, runtime, or documentation path performs a boot-time remote download or references AWS as an artifact source.
+- [ ] Audit every registered backend route against its handler, permission code, database tables, and Vue API caller.
+- [ ] Verify migration order and seeded RBAC data for the default organization, super-admin user, roles, permissions, and memberships without inserting duplicate seed rows.
+- [ ] Verify that the Vue dashboard can create and manage organizations, teams, users, roles, permissions, memberships, and scoped API keys through real endpoints.
+- [ ] Add or repair missing RBAC seed data, backend permission checks, Vue forms, and safe integration tests where coverage is incomplete.
+- [ ] Produce an exact API-to-frontend/RBAC readiness report, distinguishing working flows from host-privileged Firecracker limitations.
+- [x] Inventory the complete Vue view and nested-flow surface and identify missing pages beyond the current route set.
+- [x] Audit app logs, replica logs, build logs, deployment logs, SSE reconnect behavior, and stream endpoint contracts.
+- [x] Audit GitHub source detection, Dockerfile/Compose parsing, build provenance, BuildKit usage, and image-to-microVM artifact conversion boundaries.
+- [x] Verify TAP networking, per-VM socket ownership, runtime metrics, and traffic/log observability are exposed through real endpoints and Vue views.
+- [ ] Implement the complete BuildKit source-build and OCI/filesystem-to-guest conversion pipeline; the current backend intentionally accepts only repositories that already contain `vmlinux` and `rootfs.ext4`.
+- [x] Implement missing real views and endpoints for source/build/deploy/log/runtime flows without dummy data or unsupported OCI boot claims.
+- [x] Validate the expanded Vue dashboard and package a new beta-dev dashboard/backend release after all fixes.
+- [x] Compare the Porter Vue shell with Whatomate’s non-WhatsApp workspace patterns: sidebar, filters, tables, settings, auth, responsive states, and reusable actions.
+- [x] Inventory every Porter PaaS page and nested flow needed for projects, deployments, builds, replicas, images, domains, volumes, networks, logs, traffic, analytics, servers, settings, and host readiness.
+- [x] Audit dedicated organization, team, member, user, role, permission, API-key, audit-log, and invitation pages against real RBAC endpoints.
+- [x] Remove or avoid WhatsApp/chat-specific navigation, stores, types, components, and behavior while preserving useful Whatomate workspace structure.
+- [x] Implement missing real Vue views and backend wiring, then verify every route has a live endpoint, loading/error/empty state, and RBAC permission.
+- [x] Inventory the Porter repository and classify obsolete legacy code, generated artifacts, sample pages, and required release files before deletion.
+- [x] Remove only confirmed obsolete legacy/scaffold/sample files while preserving the new backend, Vue dashboard, migrations, installer, release helpers, plan, and README documentation.
+- [x] Refresh the preserved repository README and plan document so they describe the direct Firecracker backend, database-seeded RBAC, Vue dashboard, GitHub-only artifacts, and current limitations.
+- [x] Rebuild and validate the cleaned backend/frontend tree and regenerated release archives.
+- [ ] Create a GitHub pull request from the cleaned branch to the confirmed base branch without merging it.
+- [ ] Audit every Vue route and backend endpoint for real data, actions, RBAC checks, and loading/error/empty states.
+- [ ] Complete missing project, deployment, build, replica, image, base-readiness, domain, environment, secrets, volumes, networks, hooks, crons, alerts, firewall, redirect, analytics, host, and access-management workflows.
+- [ ] Add production-grade create/edit/delete/start/stop/restart/promote/rollback/upload/revoke actions where the backend contract exists.
+- [ ] Improve global navigation, project nested navigation, organization context, role/permission visibility, and responsive mobile states without WhatsApp-specific code.
+- [ ] Validate the completed Vue dashboard against the backend route/permission map and commit the update for PR review.
+- [ ] Re-audit the open PR branch for MVP-critical backend and Vue gaps without using demo data or a separate AI GitHub identity.
+- [ ] Complete any MVP-critical backend contracts for direct image lifecycle, seeded RBAC, project resources, deployment actions, logs, and host readiness.
+- [ ] Complete any MVP-critical Vue forms/actions for projects, builds, replicas, images, environment/secrets, domains, observability, and access control.
+- [ ] Run integrated backend tests, Vue build, route/permission coverage, and safe host-independent contract validation.
+- [ ] Update the open GitHub PR with the MVP completion pass and document remaining privileged-host or BuildKit limitations.
+- [ ] Inventory the current dedicated Vue files separately from generic ResourceView/ResourceManager route aliases.
+- [ ] Define and document an approximately 40-view Porter information architecture covering operational, observability, host, and RBAC surfaces.
+- [ ] Create dedicated real-data Vue view files for the complete Porter view set and wire each route to a specific view.
+- [ ] Ensure every dedicated view has real API calls, loading/error/empty states, and no WhatsApp/demo/sample behavior.
+- [ ] Validate the complete view count, route-to-endpoint coverage, Vue build, backend tests, and responsive structure.
+- [ ] Commit the complete view set and open a follow-up GitHub pull request without merging it.
+- [ ] Audit all one-line wrapper views and distinguish real implementations from delegating placeholders.
+- [ ] Replace wrapper-only view files with genuine view components or remove redundant files in favor of a clear shared architecture.
+- [ ] Verify each remaining route has real endpoint loading, action/form behavior, RBAC handling, and honest loading/error/empty states.
+- [ ] Run a no-wrapper/no-placeholder scan and update the existing PR with the real-view correction.
+- [ ] Define the canonical 39-page Porter v1.0.0-beta-dev checklist, counting product surfaces rather than route aliases or wrapper files.
+- [ ] Map pages 1–10: dashboard/deployments, projects, project overview, deployments, deployment detail/history, build/source, build logs, environments, environment variables/secrets, and project domains.
+- [ ] Map pages 11–20: volumes, networks, webhooks, cron jobs/history, alerts, log drains, redirects, firewall/security rules, project members, and project analytics.
+- [ ] Map pages 21–30: project metrics, project events, replica pool, application logs, build/deploy settings, Git settings, functions/runtime settings, networking settings, VM/replica detail, and replica health/metrics.
+- [ ] Map pages 31–39: replica logs, replica traffic, replica SSH information, images/artifacts, global domains, servers, global traffic/analytics/logs, host readiness/runtime, and organization/team/RBAC settings.
+- [ ] For every checklist page, record the exact `api.go` method/path, handler function, required permission, migration/table source, frontend caller, and supported create/update/delete/action operations.
+- [ ] Reconcile project-scoped, organization-scoped, host-scoped, replica-scoped, SSE, and action endpoints so no page points to an unrelated resource contract.
+- [ ] Identify which of the 39 pages need dedicated Vue behavior beyond ResourceManager, including detail tabs, live streams, masked secrets, image upload/readiness, deployment promotion/rollback, and RBAC editors.
+- [ ] Implement every missing real Vue page or dedicated workflow identified by the route/API audit, with real data only and loading, error, retry, empty, validation, and permission states.
+- [ ] Add or repair backend routes/handlers/permission entries/migrations only where a required checklist surface lacks a real contract; do not add demo data or unsupported OCI-to-microVM claims.
+- [ ] Validate all 39 pages against the backend contract with route/import scans, endpoint checks, RBAC coverage checks, `go test ./...`, `go vet ./...`, and `npm run build`.
+- [ ] Produce a truthful 39-page readiness matrix that distinguishes dedicated views, shared schema-driven views, live SSE views, and blocked host-privileged or BuildKit conversion behavior.
+- [ ] Commit and push the complete page/API mapping to the open PR without merging it.
+- [ ] Re-extract every current `api.go` route, handler, route-permission entry, and migration/table source after the latest PR commit.
+- [ ] Extract every Vue route, component import, direct API endpoint, SSE stream, and router action from the current dashboard branch.
+- [ ] Compare backend endpoints against frontend callers by normalized method/path, including placeholder names, nested actions, upload routes, settings sections, and stream routes.
+- [ ] Classify all backend-only endpoints as covered, partially covered, intentionally unsupported, or genuinely missing in the Vue dashboard.
+- [ ] Check project detail navigation and global navigation for every audited page so no implemented route is unreachable from the UI.
+- [ ] Check create/edit/delete/start/stop/restart/scale/promote/rollback/verify/upload/prune/drain/revoke actions for backend contract and frontend controls.
+- [ ] Implement any genuine missed Vue page, route, action, or endpoint mapping found by the fresh audit without creating one-line wrappers.
+- [ ] Re-run backend tests, Vue build, route/import scans, RBAC coverage, no-placeholder scans, and update the gap-audit report and open PR.
+- [ ] Inventory every root-level and backend/frontend Markdown, shell script, release helper, generated document, and stale reference before moving anything.
+- [ ] Audit the latest backend and Vue branch for known runtime/build issues, including API payload mismatches, route import failures, stale links, generated-output drift, and dashboard navigation gaps.
+- [ ] Fix all reproducible backend and frontend issues found by the inventory without weakening database-seeded RBAC, direct Firecracker boundaries, or truthful unsupported-state messaging.
+- [ ] Create a clean two-workstream documentation structure with separate Backend and Frontend sections, preserving historical audit/release material where it remains useful.
+- [ ] Create separate Backend and Frontend script folders for install, validation, release, development, and packaging helpers; preserve executable bits and update invocations.
+- [ ] Keep a concise authoritative root `README.md` that explains the repository, Backend and Frontend workstreams, setup order, validation commands, artifact boundaries, and documentation index.
+- [ ] Update every moved-document and moved-script reference in README files, plans, audits, installer comments, package scripts, CI helpers, and release notes.
+- [ ] Remove only confirmed duplicates, stale generated documents, and obsolete scattered copies; do not delete required release artifacts or historical evidence without recording the canonical replacement.
+- [ ] Run backend tests/vet, Vue production build, shell syntax checks, route/RBAC scans, documentation-link scans, and diff integrity checks after reorganization.
+- [ ] Commit the stabilization and repository-organization pass, push it to the open PR, and update the PR summary without merging.
+- [ ] Inventory all current `api.go` route registrations, including nested actions, upload routes, settings endpoints, global routes, and SSE streams, after the latest organization commit.
+- [ ] Extract every frontend caller from Vue components, router schemas, client helpers, event streams, and project/global navigation.
+- [ ] Normalize method/path templates and compare every product endpoint against a reachable Vue view, tab, resource definition, stream, or action control.
+- [ ] Explicitly classify only transport/auth/session/CSRF/health/version plumbing as non-page infrastructure; map every other endpoint to a real dashboard surface.
+- [ ] Implement any remaining backend-only product endpoint views or controls with exact payloads, response handling, RBAC visibility, loading/error/empty states, and no demo data.
+- [ ] Verify nested navigation reaches every mapped surface and no Vue route points at an unregistered or semantically incorrect backend endpoint.
+- [ ] Produce a final endpoint coverage report with mapped view/component, handler, permission, migration/table source, and intentional infrastructure exceptions.
+- [ ] Run full backend/Vue validation and update the open PR with the complete endpoint-to-view coverage result without merging.

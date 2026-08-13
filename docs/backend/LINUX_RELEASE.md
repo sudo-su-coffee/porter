@@ -17,6 +17,30 @@ can install without cloning the repository:
 curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
 ```
 
+The bootstrap pauses at the terminal and asks for the PostgreSQL mode. Enter
+`1` for local PostgreSQL on this Linux host. Enter `2` for a remote database,
+then provide the complete PostgreSQL connection URL. The answers are read from
+`/dev/tty`, so this remains interactive even though the script is supplied
+through the curl pipe.
+
+To skip the prompt, pass the variables on the privileged command itself:
+
+```bash
+# Local PostgreSQL on this host.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=local bash
+
+# Remote PostgreSQL.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=remote \
+       PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
+```
+
+In WSL Bash, do not use `set PORTER_POSTGRES_MODE=local`; that is Windows CMD
+syntax. Use the explicit `sudo PORTER_POSTGRES_MODE=local` form above. The
+selected mode and remote URL are forwarded into the extracted release
+installer, so PostgreSQL is configured once rather than prompted a second time.
+
 The script verifies the release archive, runs the PostgreSQL choice, installs
 the Go daemon and embedded dashboard, verifies Firecracker, writes `/var/porter`,
 enables systemd, and prints a readiness table. The final table separates API
@@ -30,6 +54,13 @@ sudo PORTER_BASE_IMAGE_DIR=/var/porter/base-images/default \
 ```
 
 The installer performs the following deterministic steps. It builds the Vue dashboard, embeds it into the Go binary, creates the `porter` service account and writable state directories, verifies the official Firecracker release by pinned SHA-256, installs the systemd unit, writes environment/configuration files, and starts the daemon. It refuses to run as a complete microVM installation until real non-empty `vmlinux` and `rootfs.ext4` files are available.
+
+The GitHub bootstrap caches the verified daemon archive and checksum under
+`/var/cache/porter/releases` by default. A rerun reuses the archive when the
+stored SHA-256 matches; an incomplete or corrupt archive is removed and fetched
+again. Override the cache directory with `PORTER_CACHE_DIR` when needed. If the
+installer is invoked through `curl | sudo bash`, PostgreSQL mode and remote URL
+prompts are read from `/dev/tty` so they remain interactive.
 
 ## Data storage choices
 

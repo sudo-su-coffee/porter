@@ -50,7 +50,7 @@ bash scripts/backend/dev.sh up
 
 # 4. Install a Linux host for direct runtime operation; the installer asks
 #    whether PostgreSQL should be local on this host or operator-managed remote.
-sudo -E bash scripts/backend/install.sh
+sudo bash scripts/backend/install.sh
 ```
 
 After a GitHub Release is published, users can install without cloning:
@@ -58,6 +58,31 @@ After a GitHub Release is published, users can install without cloning:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
 ```
+
+During this command, answer `1` to use PostgreSQL on the Linux host, or answer
+`2` and enter a remote PostgreSQL URL. For a non-interactive invocation, put
+the variables **after `sudo`** because ordinary `sudo` does not preserve an
+exported user-shell variable:
+
+```bash
+# Local PostgreSQL on this host.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=local bash
+
+# Remote PostgreSQL; the URL is read by the installer and stored in porter.env.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=remote \
+       PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
+```
+
+In WSL Bash, `set PORTER_POSTGRES_MODE=local` is not an exported environment
+assignment; it is Windows CMD syntax. Use `export PORTER_POSTGRES_MODE=local`
+only when the command will preserve the environment, or prefer the explicit
+`sudo PORTER_POSTGRES_MODE=local bash` form above.
+
+The installer caches verified release archives in `/var/cache/porter/releases`
+and only downloads again when the archive is missing or its SHA-256 does not
+match. PostgreSQL prompts use `/dev/tty` when the script is piped through curl.
 
 The Linux installer does not use Docker. It offers local host PostgreSQL (with
 optional Debian/Ubuntu package installation using `PORTER_INSTALL_SYSTEM_DEPS=1`)

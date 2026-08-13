@@ -5,6 +5,12 @@
 porter_pg_die() { printf 'FAIL: %s\n' "$1" >&2; return 1; }
 porter_pg_note() { printf '\n==> %s\n' "$1"; }
 
+porter_pg_prompt() {
+  local prompt="$1" variable="$2" input='/dev/stdin'
+  if [ -r /dev/tty ]; then input='/dev/tty'; fi
+  IFS= read -r -p "$prompt" "$variable" < "$input"
+}
+
 porter_pg_random_password() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -hex 24
   else od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
@@ -20,7 +26,18 @@ porter_pg_as_postgres() {
 
 porter_pg_install_packages() {
   command -v apt-get >/dev/null 2>&1 || porter_pg_die "PostgreSQL is missing; install it with the host package manager, then rerun"
-  [ "${PORTER_INSTALL_SYSTEM_DEPS:-0}" = 1 ] || porter_pg_die "PostgreSQL client/server is missing; install it first or set PORTER_INSTALL_SYSTEM_DEPS=1 on Debian/Ubuntu"
+  if [ "${PORTER_INSTALL_SYSTEM_DEPS:-0}" != 1 ]; then
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+      local install_deps
+      porter_pg_prompt "PostgreSQL is not installed. Install PostgreSQL server and client now? [Y/n]: " install_deps
+      case "${install_deps:-y}" in
+        y|Y|yes|YES) export PORTER_INSTALL_SYSTEM_DEPS=1 ;;
+        *) porter_pg_die "PostgreSQL is missing; install it first or rerun with PORTER_INSTALL_SYSTEM_DEPS=1" ;;
+      esac
+    else
+      porter_pg_die "PostgreSQL client/server is missing; install it first or rerun with PORTER_INSTALL_SYSTEM_DEPS=1 on Debian/Ubuntu"
+    fi
+  fi
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y postgresql postgresql-client
@@ -55,8 +72,8 @@ porter_pg_setup_local() {
 porter_pg_setup_remote() {
   porter_pg_note "Operator-managed PostgreSQL"
   [ -n "${PORTER_DATABASE_URL:-}" ] || {
-    if [ -t 0 ]; then
-      read -r -p "PostgreSQL connection URL (password may be embedded or supplied by your environment): " PORTER_DATABASE_URL
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+      porter_pg_prompt "PostgreSQL connection URL (password may be embedded or supplied by your environment): " PORTER_DATABASE_URL
     fi
   }
   [ -n "${PORTER_DATABASE_URL:-}" ] || porter_pg_die "PORTER_DATABASE_URL is required for remote PostgreSQL mode"
@@ -68,16 +85,16 @@ porter_pg_setup_remote() {
 
 porter_pg_setup() {
   local mode="${PORTER_POSTGRES_MODE:-}"
-  if [ -z "$mode" ] && [ -t 0 ]; then
+  if [ -z "$mode" ] && { [ -t 0 ] || [ -r /dev/tty ]; }; then
     printf '\nChoose the PostgreSQL data-store mode:\n'
     printf '  1) local host PostgreSQL (install/use PostgreSQL on this Linux server)\n'
     printf '  2) remote PostgreSQL (managed database or another server)\n'
-    read -r -p 'Select [1/2]: ' choice
+    porter_pg_prompt 'Select [1/2]: ' choice
     case "$choice" in 1) mode=local ;; 2) mode=remote ;; *) porter_pg_die 'choose 1 or 2' ;; esac
   fi
   case "$mode" in
     local) porter_pg_setup_local ;;
     remote) porter_pg_setup_remote ;;
-    *) porter_pg_die 'set PORTER_POSTGRES_MODE=local or remote; interactive installation asks this question automatically' ;;
+    *) porter_pg_die 'set PORTER_POSTGRES_MODE=local or remote; for curl | sudo bash use sudo PORTER_POSTGRES_MODE=local bash or choose a mode when prompted' ;;
   esac
 }

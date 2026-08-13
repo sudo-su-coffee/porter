@@ -36,12 +36,40 @@ For a published GitHub Release, the shortest path is one command:
 curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
 ```
 
+The installer pauses at the terminal and asks for the PostgreSQL mode. Enter
+`1` for local PostgreSQL on this Linux host. Enter `2` to use a remote database,
+then provide its complete PostgreSQL connection URL when prompted. The prompt
+is read from `/dev/tty`, so it remains available even though the installer
+script itself is supplied through the curl pipe.
+
+The equivalent non-interactive commands are:
+
+```bash
+# Local PostgreSQL on this host.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=local bash
+
+# Remote PostgreSQL.
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+  | sudo PORTER_POSTGRES_MODE=remote \
+       PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
+```
+
+Place the variables after `sudo`. A command such as `set PORTER_POSTGRES_MODE=local`
+is Windows CMD syntax and does not export the variable in WSL Bash; `export
+PORTER_POSTGRES_MODE=local` is the Bash form, but `sudo` may still remove it.
+
 The bootstrap downloads the architecture-specific Porter package and its
 checksum sidecar, verifies the package, and delegates to the same installer
 used by the source checkout. Set `PORTER_RELEASE_TAG` for a different release,
 or set `PORTER_RELEASE_PACKAGE_SHA256` explicitly when the checksum sidecar is
 not reachable. The release must include a real base-image bundle; the installer
 will not fabricate one.
+
+Verified release archives are cached at `/var/cache/porter/releases` by
+default, so repeated installer runs do not download the same package again. A
+checksum mismatch removes the cached file and performs a clean download. Set
+`PORTER_CACHE_DIR` to choose another cache location.
 
 For files around 50 MB, you may upload the two files at the repository root as
 `vmlinux` and `rootfs.ext4`, as the current main branch does, or create a GitHub
@@ -117,9 +145,11 @@ release without those real artifacts.
 
 PostgreSQL stores Porter’s control-plane state. The Linux installer asks whether
 to use PostgreSQL on the same host or a remote operator-managed PostgreSQL
-service; it does not use Docker for the Linux installation and does not place
-the database in a Firecracker guest. `/var/porter` contains the editable TOML,
-protected environment file, image/artifact state, and local volume backing data.
+service; for local mode it can install Debian/Ubuntu PostgreSQL packages after
+confirmation, while remote mode verifies the URL with `psql`. It does not use
+Docker for the Linux installation and does not place the database in a
+Firecracker guest. `/var/porter` contains the editable TOML, protected
+environment file, image/artifact state, and local volume backing data.
 
 ## Where does PostgreSQL run in production?
 

@@ -41,17 +41,20 @@ The local filesystem under `/var/porter` stores the editable `porter.toml`, prot
 
 The repository includes `.github/workflows/release.yml`. It supports two
 triggers. A maintainer can use **Actions → Porter Linux release → Run workflow**
-and provide the release tag, architecture, a GitHub Release URL containing a
-real `vmlinux` plus `rootfs.ext4` bundle, and that bundle’s SHA-256 digest. Or a
-maintainer can push a `v*` tag after configuring repository secrets
-`PORTER_BASE_IMAGE_URL` and `PORTER_BASE_IMAGE_SHA256` with the same values.
+and provide the release tag and architecture. Or a maintainer can push a `v*`
+tag. In both cases, the workflow reads the real guest files from
+`release/guest-artifacts/<architecture>/vmlinux` and
+`release/guest-artifacts/<architecture>/rootfs.ext4`, calculates their SHA-256
+values, and creates the daemon and base-image archives plus checksum sidecars.
 
-The guest bundle must already exist in a GitHub Release because the workflow
-downloads and verifies it before creating the daemon release. This avoids a
-chicken-and-egg release upload and prevents the workflow from manufacturing a
-kernel or root filesystem. The workflow then builds the Vue dashboard, embeds it
-in the Go daemon, creates the daemon and base-image archives plus `.sha256`
-sidecars, and publishes the assets expected by `install-from-github.sh`.
+Because these files are around 50 MB, the preferred path is a separate GitHub
+Release named `base-images-v1.0.0-beta-dev` with two assets named exactly
+`vmlinux` and `rootfs.ext4`. The workflow downloads those assets when the
+repository folder is empty and calculates SHA-256 values automatically. For
+smaller files, Git LFS-managed files in
+`release/guest-artifacts/<architecture>/` are also supported. Do not add
+placeholders. The Firecracker VMM binary remains separate: the Linux installer
+downloads and verifies the pinned official Firecracker release.
 
 ```bash
 PORTER_RELEASE_TAG=v1.0.0-beta \

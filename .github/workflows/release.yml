@@ -1,9 +1,14 @@
 name: Porter Linux release
 
-# A release needs a real compatible vmlinux + rootfs.ext4 bundle. The workflow
-# accepts that bundle through manual inputs or repository secrets; it never
-# fabricates a guest image and never treats an OCI image as a Firecracker boot
-# artifact.
+# Firecracker is three separate concerns here:
+#   1. the official VMM binary, fetched and checksum-verified by the installer;
+#   2. a guest kernel (vmlinux for x86_64); and
+#   3. a guest root filesystem (rootfs.ext4).
+# This workflow accepts the latter two as separate files in
+# release/guest-artifacts/<architecture>/ when checked into the repository. For
+# large files, it can instead download separately named vmlinux/rootfs.ext4
+# assets from a GitHub Release. It never treats an OCI image or firectl as a
+# guest artifact.
 
 on:
   workflow_dispatch:
@@ -21,13 +26,25 @@ on:
         options:
           - x86_64
           - aarch64
-      base_image_url:
-        description: "GitHub Release URL for a real vmlinux + rootfs.ext4 bundle"
-        required: true
+      guest_release_repository:
+        description: "Optional GitHub owner/repository containing guest assets"
+        required: false
+        default: "sudo-su-coffee/porter"
         type: string
-      base_image_sha256:
-        description: "SHA-256 digest of that base-image bundle"
-        required: true
+      guest_release_tag:
+        description: "Optional GitHub Release tag containing guest assets"
+        required: false
+        default: "base-images-v1.0.0-beta-dev"
+        type: string
+      guest_kernel_asset:
+        description: "Guest kernel Release asset filename"
+        required: false
+        default: "vmlinux"
+        type: string
+      guest_rootfs_asset:
+        description: "Guest rootfs Release asset filename"
+        required: false
+        default: "rootfs.ext4"
         type: string
       prerelease:
         description: "Publish as a prerelease"
@@ -52,8 +69,10 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
       ARCH: ${{ inputs.architecture || 'x86_64' }}
-      BASE_IMAGE_URL: ${{ inputs.base_image_url || secrets.PORTER_BASE_IMAGE_URL }}
-      BASE_IMAGE_SHA256: ${{ inputs.base_image_sha256 || secrets.PORTER_BASE_IMAGE_SHA256 }}
+      GUEST_RELEASE_REPOSITORY: ${{ inputs.guest_release_repository || secrets.PORTER_GUEST_RELEASE_REPOSITORY || github.repository }}
+      GUEST_RELEASE_TAG: ${{ inputs.guest_release_tag || secrets.PORTER_GUEST_RELEASE_TAG }}
+      GUEST_KERNEL_ASSET: ${{ inputs.guest_kernel_asset || 'vmlinux' }}
+      GUEST_ROOTFS_ASSET: ${{ inputs.guest_rootfs_asset || 'rootfs.ext4' }}
       REPOSITORY: ${{ github.repository }}
 
     steps:
@@ -61,6 +80,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
+          lfs: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -74,34 +94,40 @@ jobs:
         with:
           go-version-file: backend/go.mod
 
-      - name: Download and verify real guest artifacts
+      - name: Load separate guest artifacts from folder or GitHub Release
         shell: bash
         run: |
           set -euo pipefail
-          [ -n "$BASE_IMAGE_URL" ] || { echo "Provide base_image_url or PORTER_BASE_IMAGE_URL" >&2; exit 1; }
-          [ -n "$BASE_IMAGE_SHA256" ] || { echo "Provide base_image_sha256 or PORTER_BASE_IMAGE_SHA256" >&2; exit 1; }
-          case "$BASE_IMAGE_URL" in
-            https://github.com/*/releases/download/*) ;;
-            *) echo "base image URL must be a GitHub Release download URL" >&2; exit 1 ;;
-          esac
-          case "$BASE_IMAGE_SHA256" in
-            ''|*[!0-9a-fA-F]*) echo "base image SHA-256 must be hexadecimal" >&2; exit 1 ;;
-          esac
-          [ "${#BASE_IMAGE_SHA256}" -eq 64 ] || { echo "base image SHA-256 must contain 64 hex characters" >&2; exit 1; }
-          work="${RUNNER_TEMP}/porter-base-image"
-          mkdir -p "$work/unpacked" "$GITHUB_WORKSPACE/release-inputs/base-image"
-          archive="$work/base-image"
-          curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$archive" "$BASE_IMAGE_URL"
-          printf '%s  %s\n' "$BASE_IMAGE_SHA256" "$archive" | sha256sum -c -
-          case "$BASE_IMAGE_URL" in
-            *.zip|*.zip\?*) unzip -q "$archive" -d "$work/unpacked" ;;
-            *) tar --extract --file "$archive" --directory "$work/unpacked" --no-same-owner --no-same-permissions ;;
-          esac
-          kernel="$(find "$work/unpacked" -type f -name vmlinux -print -quit)"
-          rootfs="$(find "$work/unpacked" -type f -name rootfs.ext4 -print -quit)"
-          [ -n "$kernel" ] && [ -n "$rootfs" ] || { echo "base bundle must contain real vmlinux and rootfs.ext4" >&2; exit 1; }
+          guest_dir="$GITHUB_WORKSPACE/release/guest-artifacts/$ARCH"
+          kernel="$guest_dir/vmlinux"
+          rootfs="$guest_dir/rootfs.ext4"
+          if [ -s "$kernel" ] && [ -s "$rootfs" ]; then
+            echo "Using guest artifacts from $guest_dir"
+          elif [ -s "$GITHUB_WORKSPACE/vmlinux" ] && [ -s "$GITHUB_WORKSPACE/rootfs.ext4" ]; then
+            kernel="$GITHUB_WORKSPACE/vmlinux"
+            rootfs="$GITHUB_WORKSPACE/rootfs.ext4"
+            echo "Using guest artifacts uploaded at repository root"
+          else
+            [ -n "$GUEST_RELEASE_TAG" ] || { echo "guest files are absent and guest_release_tag is empty" >&2; exit 1; }
+            case "$GUEST_RELEASE_REPOSITORY" in
+              */*) ;;
+              *) echo "guest_release_repository must be owner/repository" >&2; exit 1 ;;
+            esac
+            base="https://github.com/${GUEST_RELEASE_REPOSITORY}/releases/download/${GUEST_RELEASE_TAG}"
+            work="${RUNNER_TEMP}/porter-guest-artifacts"
+            mkdir -p "$work"
+            curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$work/vmlinux" "$base/$GUEST_KERNEL_ASSET"
+            curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$work/rootfs.ext4" "$base/$GUEST_ROOTFS_ASSET"
+            kernel="$work/vmlinux"
+            rootfs="$work/rootfs.ext4"
+          fi
+          test -s "$kernel" || { echo "missing real guest kernel: $kernel" >&2; exit 1; }
+          test -s "$rootfs" || { echo "missing real guest rootfs: $rootfs" >&2; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/release-inputs/base-image"
           install -m 0644 "$kernel" "$GITHUB_WORKSPACE/release-inputs/base-image/vmlinux"
           install -m 0644 "$rootfs" "$GITHUB_WORKSPACE/release-inputs/base-image/rootfs.ext4"
+          sha256sum "$kernel" | tee "$GITHUB_WORKSPACE/release-inputs/base-image/vmlinux.sha256"
+          sha256sum "$rootfs" | tee "$GITHUB_WORKSPACE/release-inputs/base-image/rootfs.ext4.sha256"
 
       - name: Build Vue dashboard and Go release archives
         shell: bash

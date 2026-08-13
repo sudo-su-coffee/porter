@@ -74,3 +74,17 @@
 - [x] Add a final installer status/health check that clearly distinguishes API availability, database readiness, KVM/TAP readiness, Firecracker checksum readiness, and guest-artifact readiness.
 - [x] Re-run the complete API-to-handler/RBAC/Vue audit, backend tests/vet, Vue build, embedded Go build, shell checks, and no-Docker installer scan.
 - [x] Verify the one-command documentation, dashboard URL, config path, credential behavior, and operator-host limitations.
+
+## GitHub branch cleanup review
+
+- [ ] Inspect PR #11 state, merge state, default branch, and branch protection.
+- [ ] Inventory local and remote branches with their last commits and merged/open PR association.
+- [ ] Classify branches as protected/current, open-review, merged/superseded, or safe-to-delete.
+- [ ] Report a deletion list and preserve the branch needed for rollback until the user confirms cleanup.
+
+## Final candidate PR into main
+
+- [ ] Verify the final candidate commit and current `main` tip before creating the PR.
+- [ ] Compare the complete candidate diff against `main` and confirm the expected release files are included.
+- [ ] Open one final PR from the candidate branch into `main` with validation evidence and explicit operator-host limitations.
+- [ ] Keep the candidate branch until the user reviews and merges the PR.

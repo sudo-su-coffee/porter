@@ -5,6 +5,12 @@
 porter_pg_die() { printf 'FAIL: %s\n' "$1" >&2; return 1; }
 porter_pg_note() { printf '\n==> %s\n' "$1"; }
 
+porter_pg_prompt() {
+  local prompt="$1" variable="$2" input='/dev/stdin'
+  if [ -r /dev/tty ]; then input='/dev/tty'; fi
+  IFS= read -r -p "$prompt" "$variable" < "$input"
+}
+
 porter_pg_random_password() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -hex 24
   else od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
@@ -55,8 +61,8 @@ porter_pg_setup_local() {
 porter_pg_setup_remote() {
   porter_pg_note "Operator-managed PostgreSQL"
   [ -n "${PORTER_DATABASE_URL:-}" ] || {
-    if [ -t 0 ]; then
-      read -r -p "PostgreSQL connection URL (password may be embedded or supplied by your environment): " PORTER_DATABASE_URL
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+      porter_pg_prompt "PostgreSQL connection URL (password may be embedded or supplied by your environment): " PORTER_DATABASE_URL
     fi
   }
   [ -n "${PORTER_DATABASE_URL:-}" ] || porter_pg_die "PORTER_DATABASE_URL is required for remote PostgreSQL mode"
@@ -68,11 +74,11 @@ porter_pg_setup_remote() {
 
 porter_pg_setup() {
   local mode="${PORTER_POSTGRES_MODE:-}"
-  if [ -z "$mode" ] && [ -t 0 ]; then
+  if [ -z "$mode" ] && { [ -t 0 ] || [ -r /dev/tty ]; }; then
     printf '\nChoose the PostgreSQL data-store mode:\n'
     printf '  1) local host PostgreSQL (install/use PostgreSQL on this Linux server)\n'
     printf '  2) remote PostgreSQL (managed database or another server)\n'
-    read -r -p 'Select [1/2]: ' choice
+    porter_pg_prompt 'Select [1/2]: ' choice
     case "$choice" in 1) mode=local ;; 2) mode=remote ;; *) porter_pg_die 'choose 1 or 2' ;; esac
   fi
   case "$mode" in

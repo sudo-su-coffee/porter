@@ -43,6 +43,11 @@ or set `PORTER_RELEASE_PACKAGE_SHA256` explicitly when the checksum sidecar is
 not reachable. The release must include a real base-image bundle; the installer
 will not fabricate one.
 
+Verified release archives are cached at `/var/cache/porter/releases` by
+default, so repeated installer runs do not download the same package again. A
+checksum mismatch removes the cached file and performs a clean download. Set
+`PORTER_CACHE_DIR` to choose another cache location.
+
 For files around 50 MB, you may upload the two files at the repository root as
 `vmlinux` and `rootfs.ext4`, as the current main branch does, or create a GitHub
 Release named

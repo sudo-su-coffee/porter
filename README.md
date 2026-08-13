@@ -59,6 +59,10 @@ After a GitHub Release is published, users can install without cloning:
 curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
 ```
 
+The installer caches verified release archives in `/var/cache/porter/releases`
+and only downloads again when the archive is missing or its SHA-256 does not
+match. PostgreSQL prompts use `/dev/tty` when the script is piped through curl.
+
 The Linux installer does not use Docker. It offers local host PostgreSQL (with
 optional Debian/Ubuntu package installation using `PORTER_INSTALL_SYSTEM_DEPS=1`)
 or a verified remote `PORTER_DATABASE_URL`. The editable non-secret runtime

@@ -31,6 +31,13 @@ sudo PORTER_BASE_IMAGE_DIR=/var/porter/base-images/default \
 
 The installer performs the following deterministic steps. It builds the Vue dashboard, embeds it into the Go binary, creates the `porter` service account and writable state directories, verifies the official Firecracker release by pinned SHA-256, installs the systemd unit, writes environment/configuration files, and starts the daemon. It refuses to run as a complete microVM installation until real non-empty `vmlinux` and `rootfs.ext4` files are available.
 
+The GitHub bootstrap caches the verified daemon archive and checksum under
+`/var/cache/porter/releases` by default. A rerun reuses the archive when the
+stored SHA-256 matches; an incomplete or corrupt archive is removed and fetched
+again. Override the cache directory with `PORTER_CACHE_DIR` when needed. If the
+installer is invoked through `curl | sudo bash`, PostgreSQL mode and remote URL
+prompts are read from `/dev/tty` so they remain interactive.
+
 ## Data storage choices
 
 Porter separates control-plane state from guest artifacts. PostgreSQL stores users, database-seeded RBAC, organizations, projects, deployments, domains, variables, settings, and other API resources. The installer asks whether PostgreSQL should be installed and managed on the same Linux host or whether the operator will provide a reachable remote PostgreSQL URL. The Linux installer does not start Docker and does not place PostgreSQL inside a Firecracker guest. A remote database is useful when the operator already has managed PostgreSQL or a separate database server, but the URL, credentials, firewall, TLS mode, backups, and availability remain the operator’s responsibility.

@@ -8,6 +8,7 @@ const error = ref("");
 const crons = ref([]);
 const showAdd = ref(false);
 const newCron = ref({ name: "", schedule: "0 * * * *", job_image: "" });
+const details = ref({});
 
 async function load() {
   error.value = "";
@@ -55,6 +56,11 @@ async function runNow(c) {
   }
 }
 
+async function inspect(c) {
+  try { details.value = { ...details.value, [c.id]: await api(`/projects/${props.projectId}/crons/${encodeURIComponent(c.id)}`) }; }
+  catch (e) { toast(e.message, "error"); }
+}
+
 async function remove(c) {
   if (!confirm(`Delete cron "${c.name}"?`)) return;
   await api(`/projects/${props.projectId}/crons/${c.id}`, { method: "DELETE" });
@@ -89,9 +95,11 @@ onMounted(load);
           </td>
           <td style="text-align:right">
             <div class="actions">
+              <button class="btn btn-sm" title="Inspect cron" @click="inspect(c)">Details</button>
               <button class="icon-btn green" title="Run now" @click="runNow(c)">▶</button>
               <button class="icon-btn danger" title="Delete" @click="remove(c)">✕</button>
             </div>
+            <pre v-if="details[c.id]" class="settings-json">{{ JSON.stringify(details[c.id], null, 2) }}</pre>
           </td>
         </tr>
         <tr v-if="!crons.length"><td colspan="6" class="hint" style="text-align:center; padding:18px">No cron jobs yet.</td></tr>

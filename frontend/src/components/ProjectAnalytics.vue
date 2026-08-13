@@ -10,6 +10,13 @@ const timeseries = ref([]);
 const paths = ref([]);
 const codes = ref(null);
 const band = ref(null);
+const requests = ref(null);
+const invocations = ref(null);
+const vitals = ref(null);
+const vitalSeries = ref(null);
+const vitalBreakdowns = ref({});
+const beacon = ref({ path: "/", lcp_ms: 0, cls: 0, inp_ms: 0, ttfb_ms: 0 });
+const beaconMessage = ref("");
 
 const series = computed(() => (timeseries.value || []).map((p) => p.requests || 0));
 
@@ -31,21 +38,42 @@ async function load() {
   error.value = "";
   const base = `/projects/${props.projectId}/analytics`;
   try {
-    const [u, ts, p, c, b] = await Promise.allSettled([
+    const [u, ts, p, c, b, r, i, v, vs, lcp, cls, fid] = await Promise.allSettled([
       api(`${base}/usage`),
       api(`${base}/usage/timeseries`),
       api(`${base}/paths`),
       api(`${base}/status-codes`),
       api(`${base}/bandwidth`),
+      api(`${base}/requests`),
+      api(`${base}/invocations`),
+      api(`/projects/${props.projectId}/observability/web-vitals`),
+      api(`/projects/${props.projectId}/observability/web-vitals/timeseries`),
+      api(`/projects/${props.projectId}/observability/lcp`),
+      api(`/projects/${props.projectId}/observability/cls`),
+      api(`/projects/${props.projectId}/observability/fid`),
     ]);
     usage.value = u.status === "fulfilled" ? u.value : null;
     timeseries.value = ts.status === "fulfilled" ? ts.value?.series || [] : [];
     paths.value = p.status === "fulfilled" ? p.value?.paths || [] : [];
     codes.value = c.status === "fulfilled" ? c.value?.status_codes || {} : {};
     band.value = b.status === "fulfilled" ? b.value : null;
+    requests.value = r.status === "fulfilled" ? r.value : null;
+    invocations.value = i.status === "fulfilled" ? i.value : null;
+    vitals.value = v.status === "fulfilled" ? v.value : null;
+    vitalSeries.value = vs.status === "fulfilled" ? vs.value : null;
+    vitalBreakdowns.value = { lcp: lcp.status === "fulfilled" ? lcp.value : null, cls: cls.status === "fulfilled" ? cls.value : null, fid: fid.status === "fulfilled" ? fid.value : null };
   } catch (e) {
     error.value = e.message;
   }
+}
+
+async function recordBeacon() {
+  try {
+    const values = Object.fromEntries(Object.entries(beacon.value).filter(([key, value]) => key !== "path" && Number(value) > 0).map(([key, value]) => [key, Number(value)]));
+    const result = await api(`/projects/${props.projectId}/observability/web-vitals/beacon`, { method: "POST", body: JSON.stringify({ path: beacon.value.path, values }) });
+    beaconMessage.value = result?.status || "recorded";
+    await load();
+  } catch (e) { beaconMessage.value = e.message; }
 }
 
 onMounted(load);
@@ -57,7 +85,8 @@ onMounted(load);
   <div class="stat-grid" v-if="usage">
     <div class="stat-card"><div class="stat-label">Requests</div><div class="stat-value">{{ usage.requests || 0 }}</div></div>
     <div class="stat-card"><div class="stat-label">Bandwidth</div><div class="stat-value">{{ fmtBytes(usage.bandwidth) }}</div><div class="stat-sub">{{ fmtBytes(usage.bytes_in) }} in / {{ fmtBytes(usage.bytes_out) }} out</div></div>
-    <div class="stat-card"><div class="stat-label">Invocations</div><div class="stat-value">{{ usage.invocations || 0 }}</div></div>
+    <div class="stat-card"><div class="stat-label">Invocations</div><div class="stat-value">{{ usage.invocations || invocations?.invocations || 0 }}</div></div>
+    <div class="stat-card"><div class="stat-label">Request endpoint</div><div class="stat-value">{{ requests?.requests ?? usage.requests ?? 0 }}</div></div>
   </div>
 
   <div class="card" style="margin-bottom:18px">
@@ -91,4 +120,5 @@ onMounted(load);
       </table>
     </div>
   </div>
+  <section class="card" style="margin-top:18px"><div class="card-head"><div class="card-title">Web Vitals</div><span class="hint">{{ vitals?.length || vitals?.metrics?.length || 0 }} metric group(s)</span></div><pre class="settings-json">{{ JSON.stringify({ aggregate: vitals, timeseries: vitalSeries, lcp: vitalBreakdowns.lcp, cls: vitalBreakdowns.cls, fid: vitalBreakdowns.fid }, null, 2) }}</pre><div class="resource-form-grid"><div class="field"><label>Path</label><input v-model="beacon.path" /></div><div class="field"><label>LCP (ms)</label><input v-model.number="beacon.lcp_ms" type="number" /></div><div class="field"><label>CLS</label><input v-model.number="beacon.cls" type="number" step="0.01" /></div><div class="field"><label>INP (ms)</label><input v-model.number="beacon.inp_ms" type="number" /></div><div class="field"><label>TTFB (ms)</label><input v-model.number="beacon.ttfb_ms" type="number" /></div></div><div class="detail-actions"><button class="btn btn-sm" @click="recordBeacon">Record Web Vitals beacon</button><span class="hint">{{ beaconMessage }}</span></div></section>
 </template>

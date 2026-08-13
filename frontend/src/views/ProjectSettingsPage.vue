@@ -18,6 +18,7 @@ const rows = ref([]);
 const error = ref("");
 const loading = ref(false);
 const busy = ref(false);
+const actionResult = ref(null);
 
 function stringify(value) {
   if (typeof value === "string") return value;
@@ -78,7 +79,7 @@ async function runAction(action) {
   busy.value = true;
   try {
     const body = typeof action.body === "function" ? action.body(value, values.value) : action.body;
-    await api(resolve(action.endpoint), { method: action.method || "POST", body: body ? JSON.stringify(body) : undefined });
+    actionResult.value = await api(resolve(action.endpoint), { method: action.method || "POST", body: body ? JSON.stringify(body) : undefined });
     toast(action.success || `${action.label} completed`, "success");
     await load();
   } catch (err) {
@@ -97,6 +98,7 @@ onMounted(load);
   <a class="back-link" @click="router.push({ name: 'project', params: { id: projectId } })">&larr; Project workspace</a>
   <header class="page-header"><div><div class="page-title">{{ title }}</div><div class="page-sub">This page reads the persisted <code>/projects/:projectId/settings/{{ section }}</code> contract.</div></div><div class="detail-actions"><button class="btn btn-sm" :disabled="loading || busy" @click="load">Refresh</button><button v-for="action in settingsActions" :key="action.label" class="btn btn-sm" :disabled="loading || busy" @click="runAction(action)">{{ action.label }}</button><button v-if="!readOnly" class="btn btn-primary btn-sm" :disabled="loading || busy" @click="save">{{ busy ? "Saving…" : `Save ${section}` }}</button></div></header>
   <div v-if="error" class="error-box"><span>{{ error }}</span><button class="btn btn-sm" @click="load">Retry</button></div>
+  <section v-if="actionResult" class="card" style="margin-bottom:16px"><div class="card-head"><div class="card-title">Last action response</div><button class="btn btn-sm" @click="actionResult = null">Dismiss</button></div><pre class="settings-json">{{ JSON.stringify(actionResult, null, 2) }}</pre></section>
   <div v-if="loading" class="page-sub">Loading persisted settings…</div>
   <section v-else class="card"><div class="card-title">{{ section }} fields</div><p v-if="readOnly" class="page-sub">This endpoint is read-only and reports detected state from the project source and persisted artifacts.</p><p v-else-if="!rows.length" class="page-sub">No saved values exist for this section yet. Add only settings supported by your deployment policy.</p><div v-for="(row, index) in rows" :key="index" class="field-row settings-row"><div class="field"><label>Key</label><input v-model="row.key" :readonly="readOnly" placeholder="setting_name" /></div><div class="field field-wide"><label>Value</label><textarea v-model="row.value" :readonly="readOnly" rows="2" placeholder="value or JSON" /></div><button v-if="!readOnly" class="btn btn-danger btn-sm" @click="removeRow(index)">Remove</button></div><div v-if="!readOnly" class="detail-actions" style="margin-top:16px"><button class="btn btn-sm" @click="addRow">Add field</button><button class="btn btn-primary btn-sm" :disabled="busy" @click="save">Save settings</button></div></section>
 </template>

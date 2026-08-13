@@ -9,6 +9,8 @@ const route = useRoute();
 const router = useRouter();
 const projectId = computed(() => route.params.projectId);
 const environments = ref([]);
+const available = ref([]);
+const ranges = ref({});
 const error = ref("");
 const busy = ref(false);
 const form = ref({ name: "", branch: "main", url: "", env_domain: "" });
@@ -17,8 +19,9 @@ const editing = ref(null);
 async function load() {
   error.value = "";
   try {
-    const data = await api(`/projects/${projectId.value}/environments`);
+    const [data, options] = await Promise.all([api(`/projects/${projectId.value}/environments`), api(`/projects/${projectId.value}/environments/available`)]);
     environments.value = Array.isArray(data) ? data : data?.environments || [];
+    available.value = options?.available || [];
   } catch (err) {
     error.value = err.message;
   }
@@ -76,6 +79,25 @@ async function remove(environment) {
   }
 }
 
+async function setBranch(environment) {
+  const branch = prompt("Branch", environment.branch || "main");
+  if (branch === null) return;
+  try { await api(`/projects/${projectId.value}/environments/${encodeURIComponent(environment.id)}/branch`, { method: "POST", body: JSON.stringify({ branch }) }); toast("Environment branch updated", "success"); await load(); }
+  catch (err) { toast(err.message, "error"); }
+}
+
+async function setDomain(environment) {
+  const envDomain = prompt("Preview domain", environment.env_domain || "");
+  if (envDomain === null) return;
+  try { await api(`/projects/${projectId.value}/environments/${encodeURIComponent(environment.id)}/domain`, { method: "POST", body: JSON.stringify({ env_domain: envDomain }) }); toast("Environment domain updated", "success"); await load(); }
+  catch (err) { toast(err.message, "error"); }
+}
+
+async function loadRange(environment) {
+  try { ranges.value = { ...ranges.value, [environment.id]: await api(`/projects/${projectId.value}/environments/${encodeURIComponent(environment.id)}/range`) }; }
+  catch (err) { toast(err.message, "error"); }
+}
+
 onMounted(load);
 </script>
 
@@ -83,6 +105,7 @@ onMounted(load);
   <a class="back-link" @click="router.push({ name: 'project', params: { id: projectId } })">&larr; Project workspace</a>
   <header class="page-header"><div><div class="page-title">Environments</div><div class="page-sub">Branches, preview domains, and deployment targets backed by the control plane.</div></div><button class="btn btn-sm" :disabled="busy" @click="load">Refresh</button></header>
   <div v-if="error" class="error-box"><span>{{ error }}</span><button class="btn btn-sm" @click="load">Retry</button></div>
+  <section class="card" style="margin-bottom:16px"><div class="card-title">Available targets</div><div class="resource-link-grid"><div v-for="name in available" :key="name" class="resource-link"><strong class="mono">{{ name }}</strong><span>available environment target</span></div><div v-if="!available.length" class="empty-state">No environment targets returned.</div></div></section>
 
   <section class="card resource-create-card">
     <div class="card-title">Add environment</div>
@@ -99,7 +122,7 @@ onMounted(load);
   <div v-else class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Branch</th><th>URL</th><th>Domain</th><th>Actions</th></tr></thead><tbody>
     <tr v-for="environment in environments" :key="environment.id">
       <template v-if="editing?.id === environment.id"><td class="mono">{{ environment.name }}</td><td><input v-model="editing.branch" /></td><td><input v-model="editing.url" /></td><td><input v-model="editing.env_domain" /></td><td><button class="btn btn-sm btn-primary" :disabled="busy" @click="saveEdit">Save</button><button class="btn btn-sm" @click="editing = null">Cancel</button></td></template>
-      <template v-else><td class="mono">{{ environment.name }}</td><td class="mono">{{ environment.branch || '—' }}</td><td class="mono">{{ environment.url || '—' }}</td><td class="mono">{{ environment.env_domain || '—' }}</td><td><button class="btn btn-sm" @click="beginEdit(environment)">Edit</button><button class="btn btn-danger btn-sm" :disabled="busy" @click="remove(environment)">Delete</button></td></template>
+      <template v-else><td class="mono">{{ environment.name }}</td><td class="mono">{{ environment.branch || '—' }}</td><td class="mono">{{ environment.url || '—' }}</td><td class="mono">{{ environment.env_domain || '—' }}</td><td><button class="btn btn-sm" @click="beginEdit(environment)">Edit</button><button class="btn btn-sm" @click="setBranch(environment)">Branch</button><button class="btn btn-sm" @click="setDomain(environment)">Domain</button><button class="btn btn-sm" @click="loadRange(environment)">Range</button><button class="btn btn-danger btn-sm" :disabled="busy" @click="remove(environment)">Delete</button><pre v-if="ranges[environment.id]" class="settings-json">{{ JSON.stringify(ranges[environment.id]) }}</pre></td></template>
     </tr>
   </tbody></table></div>
 </template>

@@ -49,10 +49,18 @@ const auxiliaryRoutes = [
   ["project-networks", "Networks", "TAP and project network allocations"],
   ["project-members", "Project members", "Scoped member roles"],
   ["project-source", "Source & runtime", "Compose, scaling, healthchecks, and autoscale"],
+  ["project-general-settings", "General settings", "Avatar, transfer, and project SSH controls"],
   ["project-env-vars", "Environment variables", "Runtime configuration values"],
   ["project-domains", "Project domains", "Verification and DNS records"],
   ["project-git-settings", "Git settings", "Repository and branch provenance"],
   ["project-framework", "Framework detection", "Backend-detected source framework"],
+  ["project-status", "Project status", "Current control-plane lifecycle status"],
+  ["project-liveness", "Replica liveness", "Current liveness signals"],
+  ["project-metrics", "Project metrics", "Replica metric samples"],
+  ["project-events", "Project events", "Deployment and health event records"],
+  ["project-pool", "Replica pool", "Desired/current pool and drain control"],
+  ["project-rollouts", "Rollouts", "Project rollout records and weights"],
+  ["project-cache", "Project cache", "Cache statistics and purge operations"],
 ];
 
 async function load() {
@@ -97,6 +105,18 @@ async function replicaAct(v, kind) {
 async function redeploy() {
   await api(`/projects/${props.id}/redeploy`, { method: "POST" });
   load();
+}
+
+async function restartProject() {
+  if (!confirm(`Restart all replicas for "${project.value?.name || props.id}"?`)) return;
+  try { await api(`/projects/${props.id}/restart`, { method: "POST" }); toast("Project restart requested", "success"); await load(); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function batchReplicas(action) {
+  if (!confirm(`${action === "start" ? "Start" : "Stop"} every replica in this project?`)) return;
+  try { await api(`/projects/${props.id}/replicas/batch/${action}`, { method: "POST" }); toast(`Replica batch ${action} requested`, "success"); await load(); }
+  catch (e) { toast(e.message, "error"); }
 }
 
 async function addEnv() {
@@ -200,7 +220,9 @@ onUnmounted(() => disconnectEvents());
         &middot; <StatusBadge :state="project.status || 'pending'" />
       </div>
       <div class="detail-actions">
+        <button class="btn btn-sm" @click="router.push({ name: 'new-deployment', params: { projectId: id } })">New deployment</button>
         <button class="btn btn-sm" @click="redeploy">Redeploy</button>
+        <button class="btn btn-sm" @click="restartProject">Restart project</button>
         <button class="btn btn-sm" @click="showScale = true">Scale</button>
         <button class="btn btn-danger btn-sm" @click="deleteProject">Delete Project</button>
       </div>
@@ -252,6 +274,11 @@ onUnmounted(() => disconnectEvents());
         <div class="resource-link-grid">
           <button v-for="[name, label, description] in auxiliaryRoutes" :key="name" class="resource-link" type="button" @click="router.push({ name, params: { projectId: id } })"><strong>{{ label }}</strong><span>{{ description }}</span><span aria-hidden="true">→</span></button>
         </div>
+      </section>
+
+      <section class="card project-resource-directory">
+        <div class="card-head"><div class="card-title">Replica operations</div><span class="hint">project-scoped actions</span></div>
+        <div class="detail-actions"><button class="btn btn-sm btn-primary" @click="batchReplicas('start')">Start all replicas</button><button class="btn btn-sm" @click="batchReplicas('stop')">Stop all replicas</button></div>
       </section>
 
     <!-- Deployments -->

@@ -77,14 +77,14 @@
 
 ## GitHub branch cleanup review
 
-- [ ] Inspect PR #11 state, merge state, default branch, and branch protection.
-- [ ] Inventory local and remote branches with their last commits and merged/open PR association.
-- [ ] Classify branches as protected/current, open-review, merged/superseded, or safe-to-delete.
-- [ ] Report a deletion list and preserve the branch needed for rollback until the user confirms cleanup.
+- [x] Inspect PR #11 state, merge state, default branch, and branch protection.
+- [x] Inventory local and remote branches with their last commits and merged/open PR association.
+- [x] Classify branches as protected/current, open-review, merged/superseded, or safe-to-delete.
+- [x] Report a deletion list and preserve the branch needed for rollback until the user confirms cleanup.
 
 ## Final candidate PR into main
 
-- [ ] Verify the final candidate commit and current `main` tip before creating the PR.
-- [ ] Compare the complete candidate diff against `main` and confirm the expected release files are included.
-- [ ] Open one final PR from the candidate branch into `main` with validation evidence and explicit operator-host limitations.
-- [ ] Keep the candidate branch until the user reviews and merges the PR.
+- [x] Verify the final candidate commit and current `main` tip before creating the PR.
+- [x] Compare the complete candidate diff against `main` and confirm the expected release files are included.
+- [x] Open one final PR from the candidate branch into `main` with validation evidence and explicit operator-host limitations.
+- [x] Keep the candidate branch until the user reviews and merges the PR.

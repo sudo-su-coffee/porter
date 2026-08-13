@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"porter/internal/auth"
 	"porter/internal/cache"
 	"porter/internal/types"
 	"porter/migrations"
@@ -458,6 +459,45 @@ func (s *Store) EnsureDefaultOrg(ctx context.Context, ownerID, name string) (str
 	return id, nil
 }
 
+func (s *Store) ListOrgMembers(orgID string) []*types.OrgMember {
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT om.org_id, om.user_id, u.username, om.role
+		FROM org_members om JOIN users u ON u.id = om.user_id
+		WHERE om.org_id = $1 ORDER BY u.username`, orgID)
+	if err != nil {
+		log.Printf("store: list org members for %s: %v", orgID, err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]*types.OrgMember, 0)
+	for rows.Next() {
+		m := &types.OrgMember{}
+		if err := rows.Scan(&m.OrgID, &m.UserID, &m.Username, &m.Role); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (s *Store) AddOrgMember(orgID, userID, role string) error {
+	_, err := s.pool.Exec(context.Background(), `
+		INSERT INTO org_members (org_id, user_id, role) VALUES ($1,$2,$3)
+		ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role`, orgID, userID, role)
+	return err
+}
+
+func (s *Store) SetOrgMemberRole(orgID, userID, role string) bool {
+	res, err := s.pool.Exec(context.Background(),
+		`UPDATE org_members SET role = $3 WHERE org_id = $1 AND user_id = $2`, orgID, userID, role)
+	return err == nil && res.RowsAffected() > 0
+}
+
+func (s *Store) DeleteOrgMember(orgID, userID string) bool {
+	res, err := s.pool.Exec(context.Background(),
+		`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, orgID, userID)
+	return err == nil && res.RowsAffected() > 0
+}
+
 func (s *Store) PutOrg(o *types.Org) error {
 	_, err := s.pool.Exec(context.Background(), `
 		INSERT INTO orgs (id, name, owner_id, is_default) VALUES ($1,$2,$3,false)`,
@@ -666,8 +706,16 @@ func (s *Store) RemoveDNSRecord(projectID, name string) error {
 // --- Build logs (rolling, per project) ---
 
 func (s *Store) AppendBuildLog(projectID, line string) {
+	s.AppendBuildLogFor(projectID, "", line)
+	return
+}
+
+// AppendBuildLogFor persists a project build line with an optional build ID.
+// The nullable build ID preserves compatibility with historical project-level
+// lines while allowing live build streams to remain scoped to one build.
+func (s *Store) AppendBuildLogFor(projectID, buildID, line string) {
 	_, err := s.pool.Exec(context.Background(),
-		`INSERT INTO build_logs (project_id, line) VALUES ($1,$2)`, projectID, line)
+		`INSERT INTO build_logs (project_id, build_id, line) VALUES ($1,$2,$3)`, projectID, nullStr(buildID), line)
 	if err != nil {
 		log.Printf("store: append build log for %s: %v", projectID, err)
 	}
@@ -697,6 +745,31 @@ func (s *Store) TailBuildLogs(projectID string, n int) []string {
 }
 
 // --- Deployments (version history / rollback) ---
+
+// TailBuildLogsFor returns only the lines for one build, oldest first.
+func (s *Store) TailBuildLogsFor(projectID, buildID string, n int) []string {
+	if n <= 0 {
+		n = 200
+	}
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT line FROM (SELECT id, line FROM build_logs
+		 WHERE project_id = $1 AND build_id = $2 ORDER BY id DESC LIMIT $3) t
+		ORDER BY id ASC`, projectID, buildID, n)
+	if err != nil {
+		log.Printf("store: tail build logs for %s/%s: %v", projectID, buildID, err)
+		return nil
+	}
+	defer rows.Close()
+	out := make([]string, 0)
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
 
 func (s *Store) CreateDeployment(d *types.Deployment) error {
 	if d.RolloutPercent == 0 {
@@ -807,24 +880,40 @@ func (s *Store) DeleteSecret(id string) error {
 	return err
 }
 
-// --- Golden images (image library; image is an OCI ref/URL) ---
+// --- Golden images (direct Firecracker rootfs + kernel manifests) ---
 
 func (s *Store) PutGoldenImage(gi *types.GoldenImage) error {
+	kind := gi.Kind
+	if kind == "" {
+		kind = "custom"
+	}
+	arch := gi.Architecture
+	if arch == "" {
+		arch = "x86_64"
+	}
+	status := gi.Status
+	if status == "" {
+		status = "unknown"
+	}
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO golden_images (id, name, image, description, vcpus, mem_mib, ports, env, tags, logo, version, data, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+		INSERT INTO golden_images (id, name, image, description, vcpus, mem_mib, ports, env, tags, logo, version, kind, architecture, rootfs_path, kernel_path, rootfs_sha256, kernel_sha256, status, validated_at, data, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20, now())
 		ON CONFLICT (name) DO UPDATE SET image=EXCLUDED.image, description=EXCLUDED.description,
 			vcpus=EXCLUDED.vcpus, mem_mib=EXCLUDED.mem_mib, ports=EXCLUDED.ports,
 			env=EXCLUDED.env, tags=EXCLUDED.tags, logo=EXCLUDED.logo, version=EXCLUDED.version,
-			data=EXCLUDED.data`,
+			kind=EXCLUDED.kind, architecture=EXCLUDED.architecture, rootfs_path=EXCLUDED.rootfs_path,
+			kernel_path=EXCLUDED.kernel_path, rootfs_sha256=EXCLUDED.rootfs_sha256,
+			kernel_sha256=EXCLUDED.kernel_sha256, status=EXCLUDED.status,
+			validated_at=EXCLUDED.validated_at, data=EXCLUDED.data`,
 		gi.ID, gi.Name, gi.Image, gi.Description, gi.VCPUs, gi.MemMiB,
 		string(mustJSON(gi.Ports)), string(mustJSON(gi.Env)), gi.Tags, gi.Logo, gi.Version,
+		kind, arch, gi.Rootfs, gi.Kernel, gi.RootfsSHA256, gi.KernelSHA256, status, gi.ValidatedAt,
 		string(mustJSON(gi)))
 	return err
 }
 
 func (s *Store) ListGoldenImages() []*types.GoldenImage {
-	rows, err := s.pool.Query(context.Background(), `SELECT data FROM golden_images ORDER BY name`)
+	rows, err := s.pool.Query(context.Background(), `SELECT data, kind, architecture, rootfs_path, kernel_path, rootfs_sha256, kernel_sha256, status, validated_at FROM golden_images ORDER BY name`)
 	if err != nil {
 		log.Printf("store: list golden images: %v", err)
 		return nil
@@ -833,13 +922,17 @@ func (s *Store) ListGoldenImages() []*types.GoldenImage {
 	out := make([]*types.GoldenImage, 0)
 	for rows.Next() {
 		var data []byte
-		if err := rows.Scan(&data); err != nil {
+		var kind, arch, rootfs, kernel, rootfsSHA, kernelSHA, status string
+		var validatedAt *time.Time
+		if err := rows.Scan(&data, &kind, &arch, &rootfs, &kernel, &rootfsSHA, &kernelSHA, &status, &validatedAt); err != nil {
 			continue
 		}
 		var gi types.GoldenImage
 		if err := json.Unmarshal(data, &gi); err != nil {
 			continue
 		}
+		gi.Kind, gi.Architecture, gi.Rootfs, gi.Kernel = kind, arch, rootfs, kernel
+		gi.RootfsSHA256, gi.KernelSHA256, gi.Status, gi.ValidatedAt = rootfsSHA, kernelSHA, status, validatedAt
 		out = append(out, &gi)
 	}
 	return out
@@ -913,6 +1006,38 @@ func (s *Store) ListHealthEvents(projectID string, limit int) []*types.HealthEve
 }
 
 // --- Users ---
+
+// SeededAdminUsername is the migration-created principal name. It is a data
+// identity, not an authorization bypass; every request still resolves through
+// its users/roles/role_permissions rows.
+const SeededAdminUsername = "admin"
+
+// EnsureSeededAdmin initializes the migration-seeded admin row exactly once.
+// Existing password hashes are never overwritten. A blank password requires a
+// one-time environment secret so the database remains the authority.
+func (s *Store) EnsureSeededAdmin(password string) error {
+	u, ok := s.GetUserByUsername(SeededAdminUsername)
+	if !ok {
+		return fmt.Errorf("seeded admin user %q is missing; run database migrations", SeededAdminUsername)
+	}
+	if u.PasswordHash != "" {
+		return nil
+	}
+	if err := auth.ValidateBootstrapPassword(password); err != nil {
+		return fmt.Errorf("seeded admin password is not initialized: %w", err)
+	}
+	salt, err := auth.NewSalt()
+	if err != nil {
+		return fmt.Errorf("generate seeded admin salt: %w", err)
+	}
+	_, err = s.pool.Exec(context.Background(), `
+		UPDATE users SET password_hash = $1, salt = $2 WHERE username = $3 AND password_hash = ''`,
+		auth.HashPassword(password, salt), salt, SeededAdminUsername)
+	if err != nil {
+		return fmt.Errorf("initialize seeded admin password: %w", err)
+	}
+	return nil
+}
 
 func (s *Store) PutUser(u *types.User) {
 	_, err := s.pool.Exec(context.Background(), `
@@ -1126,7 +1251,6 @@ func (s *Store) UpsertDailyAnalytics(projectID string, requests, bandwidth, invo
 			nullableStr(projectID), requests, bandwidth, invocations)
 	}()
 }
-
 
 func (s *Store) ListTraffic(vmID string, limit int) []*types.TrafficEntry {
 	s.trafficMu.RLock()
@@ -2206,10 +2330,14 @@ func (s *Store) OrgRoleForUser(orgID, username string) string {
 	if orgID == "" || username == "" {
 		return ""
 	}
+	u, ok := s.GetUserByUsername(username)
+	if !ok {
+		return ""
+	}
 	var role string
 	err := s.pool.QueryRow(context.Background(),
 		`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`,
-		orgID, username).Scan(&role)
+		orgID, u.ID).Scan(&role)
 	if err != nil {
 		return ""
 	}
@@ -2274,11 +2402,15 @@ func (s *Store) ProjectRoleForUser(projectID, username string) string {
 	if projectID == "" || username == "" {
 		return ""
 	}
+	u, ok := s.GetUserByUsername(username)
+	if !ok {
+		return ""
+	}
 	var role string
 	// 1. Direct project membership.
 	err := s.pool.QueryRow(context.Background(),
 		`SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2`,
-		projectID, username).Scan(&role)
+		projectID, u.ID).Scan(&role)
 	if err == nil && role != "" {
 		return role
 	}
@@ -2291,7 +2423,7 @@ func (s *Store) ProjectRoleForUser(projectID, username string) string {
 	}
 	err = s.pool.QueryRow(context.Background(),
 		`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`,
-		orgID, username).Scan(&role)
+		orgID, u.ID).Scan(&role)
 	if err == nil && role != "" {
 		return role
 	}

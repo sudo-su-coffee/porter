@@ -4,6 +4,8 @@ import { api } from "../api/client";
 import Sparkline from "../components/Sparkline.vue";
 
 const usage = ref(null);
+const global = ref(null);
+const globalSeries = ref([]);
 const error = ref("");
 const loading = ref(true);
 const period = ref("24h");
@@ -42,7 +44,15 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    usage.value = await api(`/usage?period=${period.value}`);
+    const [u, g, ts] = await Promise.allSettled([
+      api(`/usage?period=${period.value}`),
+      api("/global/analytics"),
+      api("/global/analytics/timeseries"),
+    ]);
+    if (u.status === "rejected") throw u.reason;
+    usage.value = u.value;
+    global.value = g.status === "fulfilled" ? g.value : null;
+    globalSeries.value = ts.status === "fulfilled" ? ts.value?.series || [] : [];
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -73,6 +83,12 @@ onMounted(load);
   <p v-if="loading && !usage" class="page-sub">Loading…</p>
 
   <template v-if="usage">
+    <div class="analytics-context-strip">
+      <div><span class="stat-label">Control plane snapshot</span><strong>{{ global?.requests ?? usage.edge_requests ?? 0 }} requests</strong></div>
+      <div><span class="stat-label">Observed projects</span><strong>{{ global?.projects ?? usage.projects ?? 0 }}</strong></div>
+      <div><span class="stat-label">Signal window</span><strong>{{ globalSeries.length }} points</strong></div>
+      <div class="hint">Traffic is collected from Porter’s gateway rings and shown as operational telemetry, not billing truth.</div>
+    </div>
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-label">Edge requests</div>

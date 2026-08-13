@@ -24,7 +24,7 @@ func (f *fakePortStore) GetVM(id string) (*types.VM, bool) {
 	}
 	return nil, false
 }
-func (f *fakePortStore) ListVMs() []*types.VM                 { return f.vms }
+func (f *fakePortStore) ListVMs() []*types.VM                    { return f.vms }
 func (f *fakePortStore) ListDomains(vmID string) []*types.Domain { return nil }
 func (f *fakePortStore) ListFirewallRules(projectID string) []*types.FirewallRule {
 	return nil

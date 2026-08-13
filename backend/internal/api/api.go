@@ -20,8 +20,10 @@ import (
 
 	"porter/internal/autoscale"
 	"porter/internal/compose"
+	"porter/internal/config"
 	"porter/internal/dns"
 	"porter/internal/event"
+	"porter/internal/imagecatalog"
 	"porter/internal/netmgr"
 	"porter/internal/notify"
 	"porter/internal/store"
@@ -32,7 +34,8 @@ import (
 // HeaderOrgID is the header used to pass the current org context.
 const HeaderOrgID = "X-Porter-Org-Id"
 
-// HeaderUserID is the header used to pass the acting user (optional, falls back to admin).
+// HeaderUserID is retained for compatibility with older clients; authorization
+// always resolves the bearer token to a persisted database user.
 const HeaderUserID = "X-Porter-User-Id"
 
 // VMRunner is the executor the API boots replicas through (the runtime's
@@ -44,31 +47,29 @@ type VMRunner interface {
 	Delete(ctx context.Context, vm *types.VM) error
 }
 
-// Execer optionally bridges a command into a running VM's containerd task
-// (the SSH/console path). Implemented by the runtime engine when the host has
-// containerd; nil when unavailable (bare/firecracker-only boots).
+// Execer is reserved for a future guest-vsock agent. Direct Firecracker VMs do
+// not expose a container task or an implicit host shell bridge.
 type Execer interface {
 	Exec(ctx context.Context, vmID string, stdin, stdout interface{}) error
 }
 
-// Cataloger lists known images (OCI refs, never local paths).
+// Cataloger lists known direct Firecracker image manifests.
 type Cataloger interface {
 	All() []types.ImageManifest
 }
 
 // API holds every dependency of the Control API.
 type API struct {
-	store      *store.Store
-	hub        *event.Hub
-	vmm        VMRunner
-	net        *netmgr.NetManager
-	catalog    Cataloger
-	token      string
-	baseDomain string
-	adminUser  string
-	adminPass  string
-	version    string
-	logger     *log.Logger
+	store             *store.Store
+	hub               *event.Hub
+	vmm               VMRunner
+	net               *netmgr.NetManager
+	catalog           Cataloger
+	secretKeyMaterial string
+	baseDomain        string
+	version           string
+	logger            *log.Logger
+	hostConfig        *config.Config
 
 	// customImagesDir is where user-uploaded microVM .zip images unpack to.
 	// Set via SetCustomImagesDir (wired from config in main.go).
@@ -105,30 +106,28 @@ type API struct {
 }
 
 // NewAPI wires the Control API.
-func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManager, catalog Cataloger, token, baseDomain, adminUser, adminPass, version string) *API {
+func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManager, catalog Cataloger, secretKey, baseDomain, version string) *API {
 	api := &API{
-		store:        st,
-		hub:          hub,
-		vmm:          vmm,
-		net:          net,
-		catalog:      catalog,
-		token:        token,
-		baseDomain:   baseDomain,
-		adminUser:    adminUser,
-		adminPass:    adminPass,
-		version:      version,
-		logger:       log.New(log.Writer(), "api: ", log.LstdFlags),
-		csrfToken:    generateRandomToken(32),
-		rate:         map[string]rateEntry{},
-		settings:     map[string]map[string]any{},
-		crons:        map[string][]any{},
-		alerts:       map[string][]any{},
-		drains:       map[string][]any{},
-		redirects:    map[string][]any{},
-		firewall:     map[string][]any{},
-		environments: map[string][]any{},
-		hooks:        map[string][]any{},
-		volumes:      map[string]any{},
+		store:             st,
+		hub:               hub,
+		vmm:               vmm,
+		net:               net,
+		catalog:           catalog,
+		secretKeyMaterial: secretKey,
+		baseDomain:        baseDomain,
+		version:           version,
+		logger:            log.New(log.Writer(), "api: ", log.LstdFlags),
+		csrfToken:         generateRandomToken(32),
+		rate:              map[string]rateEntry{},
+		settings:          map[string]map[string]any{},
+		crons:             map[string][]any{},
+		alerts:            map[string][]any{},
+		drains:            map[string][]any{},
+		redirects:         map[string][]any{},
+		firewall:          map[string][]any{},
+		environments:      map[string][]any{},
+		hooks:             map[string][]any{},
+		volumes:           map[string]any{},
 	}
 	return api
 }
@@ -161,6 +160,10 @@ func (a *API) StartAutoscaler(interval time.Duration) {
 // SetCustomImagesDir configures the directory user-uploaded microVM images
 // are unpacked into (must be set before /images/custom is used).
 func (a *API) SetCustomImagesDir(dir string) { a.customImagesDir = dir }
+
+// SetHostConfig provides the read-only host/runtime configuration used by the
+// startup checks. The API only exposes a sanitized subset of this config.
+func (a *API) SetHostConfig(cfg *config.Config) { a.hostConfig = cfg }
 
 // SetRateLimit configures the per-IP request cap (0 disables).
 func (a *API) SetRateLimit(n int) { a.rateLimit = n }
@@ -321,7 +324,8 @@ func (a *API) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.store.ListFeedback(n))
 }
 
-// orgIDFromHeader returns the org ID from the X-Porter-Org-Id header, or the first org as fallback.
+// orgIDFromHeader returns the org ID from the X-Porter-Org-Id header, or the
+// first persisted org for compatibility with single-org clients.
 func (a *API) orgIDFromHeader(r *http.Request) string {
 	if orgID := r.Header.Get(HeaderOrgID); orgID != "" {
 		return orgID
@@ -333,12 +337,17 @@ func (a *API) orgIDFromHeader(r *http.Request) string {
 	return ""
 }
 
-// userIDFromHeader returns the user ID from X-Porter-User-Id header, or the admin user as fallback.
+// userIDFromHeader returns the authenticated database username. The legacy
+// header is accepted only when it matches the authenticated principal.
 func (a *API) userIDFromHeader(r *http.Request) string {
-	if uid := r.Header.Get(HeaderUserID); uid != "" {
-		return uid
+	principal := currentPrincipal(r)
+	if principal.username == "" {
+		return ""
 	}
-	return a.adminUser
+	if uid := r.Header.Get(HeaderUserID); uid != "" && uid != principal.username {
+		return ""
+	}
+	return principal.username
 }
 
 // Routes registers every Control API endpoint, grouped by resource.
@@ -374,6 +383,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /orgs", a.auth(a.handleListOrgs))
 	mux.HandleFunc("GET /orgs/default", a.auth(a.handleDefaultOrg))
 	mux.HandleFunc("POST /orgs", a.auth(a.handleCreateOrg))
+	// Singular aliases retained for clients that use the original org surface.
+	mux.HandleFunc("GET /org", a.auth(a.handleGetOrg))
+	mux.HandleFunc("PATCH /org", a.auth(a.handlePatchOrg))
 	mux.HandleFunc("GET /orgs/current", a.auth(a.handleGetCurrentOrg))
 	mux.HandleFunc("PATCH /orgs/current", a.auth(a.handlePatchCurrentOrg))
 	mux.HandleFunc("DELETE /orgs/current", a.auth(a.handleDeleteCurrentOrg))
@@ -441,6 +453,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	// ========== Project: Aggregated Views ==========
 	mux.HandleFunc("GET /projects/{projectId}/logs", a.auth(a.handleProjectLogs))
+	mux.HandleFunc("GET /projects/{projectId}/logs/stream", a.auth(a.handleProjectLogStream))
 	mux.HandleFunc("GET /projects/{projectId}/metrics", a.auth(a.handleProjectMetrics))
 	mux.HandleFunc("GET /projects/{projectId}/traffic", a.auth(a.handleProjectTraffic))
 	mux.HandleFunc("GET /projects/{projectId}/events", a.auth(a.handleProjectEvents))
@@ -511,6 +524,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /projects/{projectId}/environments/{envId}", a.auth(a.handleDeleteEnvironment))
 	mux.HandleFunc("POST /projects/{projectId}/environments/{envId}/branch", a.auth(a.handleEnvBranch))
 	mux.HandleFunc("POST /projects/{projectId}/environments/{envId}/domain", a.auth(a.handleEnvDomain))
+	mux.HandleFunc("GET /projects/{projectId}/environments/{envId}/range", a.auth(a.handleEnvRange))
 
 	// ========== Git & Hooks ==========
 	mux.HandleFunc("GET /projects/{projectId}/settings/git", a.auth(a.handleGetGit))
@@ -605,6 +619,10 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /usage/requests", a.auth(a.handleUsageRequests))
 	mux.HandleFunc("GET /usage/timeseries", a.auth(a.handleGlobalAnalyticsTimeseries))
 
+	// ========== Global replica aliases ==========
+	mux.HandleFunc("GET /replicas", a.auth(a.handleGlobalReplicas))
+	mux.HandleFunc("GET /replicas/{replicaId}", a.auth(a.handleGlobalReplica))
+
 	// ========== Firewall & WAF ==========
 	mux.HandleFunc("GET /projects/{projectId}/firewall/rules", a.auth(a.handleListFirewallRules))
 	mux.HandleFunc("POST /projects/{projectId}/firewall/rules", a.auth(a.handleCreateFirewallRule))
@@ -630,6 +648,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	// ========== Images / Registry ==========
 	mux.HandleFunc("GET /images", a.auth(a.handleListImages))
+	mux.HandleFunc("GET /images/base", a.auth(a.handleBaseImage))
+	mux.HandleFunc("GET /images/base/readiness", a.auth(a.handleBaseImageReadiness))
 	mux.HandleFunc("POST /images/custom", a.auth(a.handleUploadCustomImage))
 	mux.HandleFunc("GET /images/search", a.auth(a.handleImageSearch))
 	mux.HandleFunc("GET /images/{reference}", a.auth(a.handleGetImage))
@@ -649,10 +669,22 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /vms/{replicaId}/stop", a.auth(a.handleReplicaStopByID))
 	mux.HandleFunc("POST /vms/{replicaId}/restart", a.auth(a.handleReplicaRestartByID))
 	mux.HandleFunc("DELETE /vms/{replicaId}", a.auth(a.handleVMCompatDelete))
+	mux.HandleFunc("GET /vms/{replicaId}/domains", a.auth(a.handleVMCompatDomains))
+	mux.HandleFunc("GET /vms/{replicaId}/logs", a.auth(a.handleReplicaLogsByID))
+	mux.HandleFunc("GET /vms/{replicaId}/logs/stream", a.auth(a.handleReplicaLogStream))
+	mux.HandleFunc("GET /vms/{replicaId}/metrics", a.auth(a.handleReplicaMetricsByID))
+	mux.HandleFunc("GET /vms/{replicaId}/traffic", a.auth(a.handleReplicaTrafficByID))
+	mux.HandleFunc("GET /vms/{replicaId}/health", a.auth(a.handleReplicaHealthByID))
+	mux.HandleFunc("GET /vms/{replicaId}/ssh-info", a.auth(a.handleSSHInfoByID))
+	mux.HandleFunc("POST /vms/{replicaId}/ssh-cert", a.auth(a.handleSSHCertByID))
+	mux.HandleFunc("POST /vms/{replicaId}/exec", a.auth(a.handleReplicaExecByID))
+	mux.HandleFunc("GET /vms/{replicaId}/console", a.auth(a.handleReplicaConsoleByID))
 	mux.HandleFunc("GET /host/overview", a.auth(a.handleHostOverview))
 	mux.HandleFunc("GET /logs", a.auth(a.handleDaemonLogs))
 	mux.HandleFunc("GET /host/ports", a.auth(a.handleHostPorts))
 	mux.HandleFunc("GET /host/kernel", a.auth(a.handleHostKernel))
+	mux.HandleFunc("GET /host/prerequisites", a.auth(a.handleHostPrerequisites))
+	mux.HandleFunc("GET /host/runtime", a.auth(a.handleRuntimeConfig))
 	mux.HandleFunc("GET /traffic", a.auth(a.handleAllTraffic))
 	mux.HandleFunc("DELETE /traffic", a.auth(a.handleClearTraffic))
 	mux.HandleFunc("GET /traffic/search", a.auth(a.handleTrafficSearch))
@@ -690,6 +722,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /projects/{projectId}/builds", a.auth(a.handleCreateBuild))
 	mux.HandleFunc("POST /projects/{projectId}/builds/run", a.auth(a.handleCreateBuild))
 	mux.HandleFunc("GET /projects/{projectId}/builds/{buildId}/logs", a.auth(a.handleBuildLogs))
+	mux.HandleFunc("GET /projects/{projectId}/builds/{buildId}/logs/stream", a.auth(a.handleBuildLogStream))
 	mux.HandleFunc("GET /projects/{projectId}/git/branches", a.auth(a.handleGitBranches))
 	mux.HandleFunc("GET /projects/{projectId}/rollouts", a.auth(a.handleListRollouts))
 
@@ -721,16 +754,15 @@ type rbacCtxKey struct{}
 type principal struct {
 	username string
 	role     string // global role from the users table
-	isAdmin  bool   // bootstrap config admin always has full access
 }
 
-// currentPrincipal returns the principal attached to the request, or the
-// config admin when none is attached (defensive default).
+// currentPrincipal returns only the principal attached by auth. There is no
+// anonymous admin fallback.
 func currentPrincipal(r *http.Request) principal {
 	if p, ok := r.Context().Value(rbacCtxKey{}).(principal); ok {
 		return p
 	}
-	return principal{username: "admin", role: "admin", isAdmin: true}
+	return principal{}
 }
 
 // currentRole returns the effective global role of the authenticated user.
@@ -742,21 +774,15 @@ func currentUser(r *http.Request) string { return currentPrincipal(r).username }
 
 func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Authenticate the bearer token: config admin OR a per-user API key.
+		// 1. Authenticate the bearer token exclusively through persisted API keys.
 		tok := bearerToken(r)
 		p := principal{}
-		if tok != "" && constantTimeEqual(a.token, tok) {
-			p = principal{role: "admin", isAdmin: true} // bootstrap config admin
-		} else if tok != "" {
-			if u, ok := a.store.GetUserByToken(tok); ok {
-				role := u.Role
-				if role == "" {
-					role = "member"
-				}
-				p = principal{username: u.Username, role: role}
+		if tok != "" {
+			if u, ok := a.store.GetUserByToken(tok); ok && u.Username != "" {
+				p = principal{username: u.Username, role: u.Role}
 			}
 		}
-		if p.role == "" {
+		if p.username == "" {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -777,13 +803,11 @@ func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 		// pattern in routePerms is guarded by a specific permission code (e.g.
 		// ssh.connect, deployment.promote, member.remove). The check resolves
 		// global/org/project context from the URL and consults role_permissions.
-		if !p.isAdmin {
-			if perm := permForRoute(r); perm != "" {
-				ok := a.granted(r, p, perm)
-				if !ok {
-					writeError(w, http.StatusForbidden, "missing permission: "+perm)
-					return
-				}
+		if perm := permForRoute(r); perm != "" {
+			ok := a.granted(r, p, perm)
+			if !ok {
+				writeError(w, http.StatusForbidden, "missing permission: "+perm)
+				return
 			}
 		}
 		ctx := context.WithValue(r.Context(), rbacCtxKey{}, p)
@@ -809,275 +833,296 @@ func permForRoute(r *http.Request) string {
 
 var routePerms = map[string]string{
 	// projects
-	"GET /projects":                                    "project.list",
-	"POST /projects":                                   "project.create",
-	"POST /projects/compose":                           "project.create",
-	"GET /projects/{projectId}":                        "project.read",
-	"PATCH /projects/{projectId}":                      "project.rename",
-	"DELETE /projects/{projectId}":                     "project.delete",
-	"POST /projects/{projectId}/avatar":                "project.avatar",
-	"POST /projects/{projectId}/transfer":              "project.transfer",
-	"POST /projects/{projectId}/redeploy":              "project.deploy",
-	"POST /projects/{projectId}/restart":               "project.restart",
-	"POST /projects/{projectId}/export":                "project.export",
-	"POST /projects/{projectId}/import":                "project.import",
-	"PUT /projects/{projectId}/ssh":                    "ssh.toggle",
-	"GET /projects/{projectId}/scale":                  "replica.list",
-	"PATCH /projects/{projectId}/scale":                "project.scale",
-	"GET /projects/{projectId}/healthcheck":            "project.read",
-	"PUT /projects/{projectId}/healthcheck":            "project.settings",
-	"GET /projects/{projectId}/autoscale":              "project.read",
-	"PUT /projects/{projectId}/autoscale":              "project.settings",
-	"GET /projects/{projectId}/env":                    "env.list",
-	"POST /projects/{projectId}/env":                   "env.set",
-	"POST /projects/{projectId}/env/bulk":              "env.set",
-	"PATCH /projects/{projectId}/env/{envId}":          "env.set",
-	"DELETE /projects/{projectId}/env/{envId}":         "env.set",
-	"GET /projects/{projectId}/secrets":                "secret.list",
-	"POST /projects/{projectId}/secrets":               "secret.create",
-	"DELETE /projects/{projectId}/secrets/{secretId}":  "secret.delete",
-	"GET /projects/{projectId}/domains":                "domain.list",
-	"POST /projects/{projectId}/domains":               "domain.add",
-	"GET /projects/{projectId}/domains/records":        "domain.list",
-	"GET /projects/{projectId}/domains/{domainId}":     "domain.list",
-	"DELETE /projects/{projectId}/domains/{domainId}":  "domain.remove",
-	"POST /projects/{projectId}/domains/{domainId}/verify":  "domain.verify",
-	"GET /projects/{projectId}/dns":                    "domain.list",
-	"GET /projects/{projectId}/compose":                "project.read",
-	"PUT /projects/{projectId}/compose":                "project.import",
-	"POST /projects/{projectId}/compose/validate":      "project.import",
-	"GET /projects/{projectId}/compose/preview":        "project.read",
-	"GET /projects/{projectId}/logs":                   "log.read",
-	"GET /projects/{projectId}/metrics":                "metric.read",
-	"GET /projects/{projectId}/traffic":                "traffic.read",
-	"GET /projects/{projectId}/events":                 "event.read",
-	"GET /projects/{projectId}/pool":                   "replica.list",
-	"POST /projects/{projectId}/pool/drain":            "project.settings",
-	"GET /projects/{projectId}/status":                 "project.read",
-	"GET /projects/{projectId}/liveness":               "project.read",
-	"GET /projects/{projectId}/replicas":               "replica.list",
-	"POST /projects/{projectId}/replicas/batch/start":  "replica.start",
-	"POST /projects/{projectId}/replicas/batch/stop":   "replica.stop",
-	"GET /projects/{projectId}/replicas/{n}":           "replica.list",
-	"POST /projects/{projectId}/replicas/{n}/start":    "replica.start",
-	"POST /projects/{projectId}/replicas/{n}/stop":     "replica.stop",
-	"POST /projects/{projectId}/replicas/{n}/restart":  "replica.restart",
-	"DELETE /projects/{projectId}/replicas/{n}":        "replica.delete",
-	"GET /projects/{projectId}/replicas/{n}/logs":      "log.read",
-	"GET /projects/{projectId}/replicas/{n}/metrics":   "metric.read",
-	"GET /projects/{projectId}/replicas/{n}/traffic":   "traffic.read",
-	"GET /projects/{projectId}/replicas/{n}/health":    "replica.list",
-	"GET /projects/{projectId}/replicas/{n}/ssh-info":  "ssh.connect",
-	"POST /projects/{projectId}/replicas/{n}/ssh-cert": "ssh.connect",
-	"POST /projects/{projectId}/replicas/{n}/exec":     "replica.exec",
-	"GET /projects/{projectId}/replicas/{n}/console":   "console.open",
-	"GET /projects/{projectId}/deployments":            "deployment.list",
-	"POST /projects/{projectId}/deployments":           "deployment.create",
-	"GET /projects/{projectId}/deployments/{deployId}": "deployment.list",
-	"GET /projects/{projectId}/deployments/{deployId}/logs": "log.read",
-	"GET /projects/{projectId}/deployments/{deployId}/checks":  "deployment.list",
-	"PUT /projects/{projectId}/deployments/{deployId}/checks":  "deployment.create",
+	"GET /projects":                                                         "project.list",
+	"POST /projects":                                                        "project.create",
+	"POST /projects/compose":                                                "project.create",
+	"GET /projects/{projectId}":                                             "project.read",
+	"PATCH /projects/{projectId}":                                           "project.rename",
+	"DELETE /projects/{projectId}":                                          "project.delete",
+	"POST /projects/{projectId}/avatar":                                     "project.avatar",
+	"POST /projects/{projectId}/transfer":                                   "project.transfer",
+	"POST /projects/{projectId}/redeploy":                                   "project.deploy",
+	"POST /projects/{projectId}/restart":                                    "project.restart",
+	"POST /projects/{projectId}/export":                                     "project.export",
+	"POST /projects/{projectId}/import":                                     "project.import",
+	"PUT /projects/{projectId}/ssh":                                         "ssh.toggle",
+	"GET /projects/{projectId}/scale":                                       "replica.list",
+	"PATCH /projects/{projectId}/scale":                                     "project.scale",
+	"GET /projects/{projectId}/healthcheck":                                 "project.read",
+	"PUT /projects/{projectId}/healthcheck":                                 "project.settings",
+	"GET /projects/{projectId}/autoscale":                                   "project.read",
+	"PUT /projects/{projectId}/autoscale":                                   "project.settings",
+	"GET /projects/{projectId}/env":                                         "env.list",
+	"POST /projects/{projectId}/env":                                        "env.set",
+	"POST /projects/{projectId}/env/bulk":                                   "env.set",
+	"PATCH /projects/{projectId}/env/{envId}":                               "env.set",
+	"DELETE /projects/{projectId}/env/{envId}":                              "env.set",
+	"GET /projects/{projectId}/secrets":                                     "secret.list",
+	"POST /projects/{projectId}/secrets":                                    "secret.create",
+	"DELETE /projects/{projectId}/secrets/{secretId}":                       "secret.delete",
+	"GET /projects/{projectId}/domains":                                     "domain.list",
+	"POST /projects/{projectId}/domains":                                    "domain.add",
+	"GET /projects/{projectId}/domains/records":                             "domain.list",
+	"GET /projects/{projectId}/domains/{domainId}":                          "domain.list",
+	"DELETE /projects/{projectId}/domains/{domainId}":                       "domain.remove",
+	"POST /projects/{projectId}/domains/{domainId}/verify":                  "domain.verify",
+	"GET /projects/{projectId}/dns":                                         "domain.list",
+	"GET /projects/{projectId}/compose":                                     "project.read",
+	"PUT /projects/{projectId}/compose":                                     "project.import",
+	"POST /projects/{projectId}/compose/validate":                           "project.import",
+	"GET /projects/{projectId}/compose/preview":                             "project.read",
+	"GET /projects/{projectId}/logs":                                        "log.read",
+	"GET /projects/{projectId}/logs/stream":                                 "log.read",
+	"GET /projects/{projectId}/metrics":                                     "metric.read",
+	"GET /projects/{projectId}/traffic":                                     "traffic.read",
+	"GET /projects/{projectId}/events":                                      "event.read",
+	"GET /projects/{projectId}/pool":                                        "replica.list",
+	"POST /projects/{projectId}/pool/drain":                                 "project.settings",
+	"GET /projects/{projectId}/status":                                      "project.read",
+	"GET /projects/{projectId}/liveness":                                    "project.read",
+	"GET /projects/{projectId}/replicas":                                    "replica.list",
+	"POST /projects/{projectId}/replicas/batch/start":                       "replica.start",
+	"POST /projects/{projectId}/replicas/batch/stop":                        "replica.stop",
+	"GET /projects/{projectId}/replicas/{n}":                                "replica.list",
+	"POST /projects/{projectId}/replicas/{n}/start":                         "replica.start",
+	"POST /projects/{projectId}/replicas/{n}/stop":                          "replica.stop",
+	"POST /projects/{projectId}/replicas/{n}/restart":                       "replica.restart",
+	"DELETE /projects/{projectId}/replicas/{n}":                             "replica.delete",
+	"GET /projects/{projectId}/replicas/{n}/logs":                           "log.read",
+	"GET /projects/{projectId}/replicas/{n}/metrics":                        "metric.read",
+	"GET /projects/{projectId}/replicas/{n}/traffic":                        "traffic.read",
+	"GET /projects/{projectId}/replicas/{n}/health":                         "replica.list",
+	"GET /projects/{projectId}/replicas/{n}/ssh-info":                       "ssh.connect",
+	"POST /projects/{projectId}/replicas/{n}/ssh-cert":                      "ssh.connect",
+	"POST /projects/{projectId}/replicas/{n}/exec":                          "replica.exec",
+	"GET /projects/{projectId}/replicas/{n}/console":                        "console.open",
+	"GET /projects/{projectId}/environments/{envId}/range":                  "project.read",
+	"GET /projects/{projectId}/deployments":                                 "deployment.list",
+	"POST /projects/{projectId}/deployments":                                "deployment.create",
+	"GET /projects/{projectId}/deployments/{deployId}":                      "deployment.list",
+	"GET /projects/{projectId}/deployments/{deployId}/logs":                 "log.read",
+	"GET /projects/{projectId}/deployments/{deployId}/checks":               "deployment.list",
+	"PUT /projects/{projectId}/deployments/{deployId}/checks":               "deployment.create",
 	"PATCH /projects/{projectId}/deployments/{deployId}/checks/{checkName}": "deployment.create",
-	"PUT /projects/{projectId}/deployments/{deployId}/rollout":  "deployment.promote",
-	"POST /projects/{projectId}/deployments/{deployId}/promote":  "deployment.promote",
-	"POST /projects/{projectId}/deployments/{deployId}/rollback": "deployment.rollback",
-	"GET /projects/{projectId}/settings/general":       "project.read",
-	"PATCH /projects/{projectId}/settings/general":     "project.settings",
-	"GET /projects/{projectId}/settings/build":         "project.read",
-	"PUT /projects/{projectId}/settings/build":         "project.settings",
-	"GET /projects/{projectId}/settings/git":           "project.read",
-	"PUT /projects/{projectId}/settings/git":           "git.settings",
-	"POST /projects/{projectId}/settings/git/sync":     "git.settings",
-	"GET /projects/{projectId}/crons":                  "cron.create",
-	"POST /projects/{projectId}/crons":                 "cron.create",
-	"GET /projects/{projectId}/crons/history":          "cron.update",
-	"GET /projects/{projectId}/crons/{cronId}":         "cron.create",
-	"PATCH /projects/{projectId}/crons/{cronId}":       "cron.update",
-	"DELETE /projects/{projectId}/crons/{cronId}":      "cron.delete",
-	"POST /projects/{projectId}/crons/{cronId}/run":    "cron.run",
-	"GET /projects/{projectId}/members":                "member.list",
-	"POST /projects/{projectId}/members":               "member.invite",
-	"POST /projects/{projectId}/members/invite":        "member.invite",
-	"PATCH /projects/{projectId}/members/{username}":   "member.role",
-	"DELETE /projects/{projectId}/members/{username}":  "member.remove",
-	"GET /projects/{projectId}/drains":                 "project.settings",
-	"POST /projects/{projectId}/drains":                "drain.create",
-	"DELETE /projects/{projectId}/drains/{drainId}":    "drain.delete",
-	"POST /projects/{projectId}/drains/{drainId}/test": "drain.create",
-	"GET /projects/{projectId}/hooks":                  "project.read",
-	"POST /projects/{projectId}/hooks":                 "hook.create",
-	"DELETE /projects/{projectId}/hooks/{hookId}":      "hook.delete",
-	"POST /projects/{projectId}/hooks/{hookId}/trigger":"hook.trigger",
-	"GET /projects/{projectId}/firewall/rules":         "project.read",
-	"POST /projects/{projectId}/firewall/rules":        "firewall.create",
-	"GET /projects/{projectId}/firewall/rules/{ruleId}":"project.read",
-	"PATCH /projects/{projectId}/firewall/rules/{ruleId}": "firewall.update",
-	"DELETE /projects/{projectId}/firewall/rules/{ruleId}": "firewall.delete",
-	"GET /projects/{projectId}/firewall/events":        "traffic.read",
-	"GET /projects/{projectId}/firewall/stats":         "traffic.read",
-	"POST /projects/{projectId}/firewall/whitelist":    "firewall.create",
-	"GET /projects/{projectId}/cache/stats":            "cache.stats",
-	"POST /projects/{projectId}/cache/purge":           "cache.purge",
-	"POST /projects/{projectId}/cache/purge/path":      "cache.purge",
-	"GET /projects/{projectId}/analytics/usage":        "analytics.read",
-	"GET /projects/{projectId}/analytics/usage/timeseries": "analytics.read",
-	"GET /projects/{projectId}/analytics/paths":        "analytics.read",
-	"GET /projects/{projectId}/analytics/status-codes": "analytics.read",
-	"GET /projects/{projectId}/analytics/bandwidth":    "analytics.read",
-	"GET /projects/{projectId}/analytics/requests":     "analytics.read",
-	"GET /projects/{projectId}/analytics/invocations":  "analytics.read",
-	"GET /projects/{projectId}/observability/web-vitals": "webvital.read",
-	"POST /projects/{projectId}/observability/web-vitals/beacon": "webvital.read",
-	"GET /projects/{projectId}/observability/web-vitals/timeseries": "webvital.read",
-	"GET /projects/{projectId}/observability/lcp":     "webvital.read",
-	"GET /projects/{projectId}/observability/cls":     "webvital.read",
-	"GET /projects/{projectId}/observability/fid":     "webvital.read",
-	"GET /projects/{projectId}/deployments/upload":    "deployment.create",
-	"GET /projects/{projectId}/deployments/{deployId}/source": "deployment.list",
-	"GET /projects/{projectId}/deployments/{deployId}/og":     "deployment.list",
-	"GET /projects/{projectId}/dns/records":           "domain.list",
-	"POST /projects/{projectId}/domains/{domainId}/reverify": "domain.verify",
-	"GET /projects/{projectId}/settings/checks":        "project.read",
-	"POST /projects/{projectId}/settings/checks":       "project.settings",
-	"GET /projects/{projectId}/settings/rollout":       "project.read",
-	"PUT /projects/{projectId}/settings/rollout":       "project.settings",
-	"GET /projects/{projectId}/settings/build-machine": "project.read",
-	"PUT /projects/{projectId}/settings/build-machine": "project.settings",
-	"POST /projects/{projectId}/settings/ignore-command": "git.settings",
-	"GET /projects/{projectId}/settings/framework":     "project.read",
-	"PATCH /projects/{projectId}/settings/git/toggles": "git.settings",
-	"GET /projects/{projectId}/settings/git/lfs":       "project.read",
-	"PUT /projects/{projectId}/settings/git/lfs":       "git.settings",
-	"GET /projects/{projectId}/settings/deployment-protection": "project.read",
-	"PUT /projects/{projectId}/settings/deployment-protection": "project.settings",
-	"GET /projects/{projectId}/settings/oidc":          "project.read",
-	"PUT /projects/{projectId}/settings/oidc":          "project.settings",
-	"GET /projects/{projectId}/settings/functions":     "git.settings",
-	"PUT /projects/{projectId}/settings/functions":     "git.settings",
-	"GET /projects/{projectId}/settings/security":      "project.read",
-	"PUT /projects/{projectId}/settings/security":      "project.settings",
-	"GET /projects/{projectId}/settings/retention":     "project.read",
-	"PUT /projects/{projectId}/settings/retention":     "project.settings",
-	"GET /projects/{projectId}/settings/networking":    "project.network",
-	"PUT /projects/{projectId}/settings/networking":    "project.network",
-	"GET /projects/{projectId}/settings/advanced":      "project.read",
-	"PUT /projects/{projectId}/settings/advanced":      "project.settings",
-	"GET /projects/{projectId}/settings/passport":      "project.read",
-	"PUT /projects/{projectId}/settings/passport":      "project.settings",
-	"GET /projects/{projectId}/settings/microfrontends": "project.read",
-	"PUT /projects/{projectId}/settings/microfrontends": "project.settings",
-	"GET /projects/{projectId}/environments":            "project.read",
-	"POST /projects/{projectId}/environments":           "project.settings",
-	"GET /projects/{projectId}/environments/available":  "project.read",
-	"GET /projects/{projectId}/environments/{envId}":    "project.read",
-	"PATCH /projects/{projectId}/environments/{envId}":  "project.settings",
-	"DELETE /projects/{projectId}/environments/{envId}": "project.settings",
-	"POST /projects/{projectId}/environments/{envId}/branch": "project.settings",
-	"POST /projects/{projectId}/environments/{envId}/domain":  "project.settings",
-	"GET /projects/{projectId}/members/{username}":     "member.list",
-	"GET /projects/{projectId}/alerts":                 "project.read",
-	"POST /projects/{projectId}/alerts":                "alert.create",
-	"GET /projects/{projectId}/alerts/{alertId}":       "project.read",
-	"PATCH /projects/{projectId}/alerts/{alertId}":     "alert.update",
-	"DELETE /projects/{projectId}/alerts/{alertId}":    "alert.delete",
-	"POST /projects/{projectId}/alerts/{alertId}/silence": "alert.silence",
-	"POST /projects/{projectId}/alerts/{alertId}/unsilence": "alert.silence",
-	"GET /projects/{projectId}/redirects":              "project.read",
-	"POST /projects/{projectId}/redirects":             "redirect.create",
-	"DELETE /projects/{projectId}/redirects/{redirectId}": "redirect.delete",
-	"PUT /projects/{projectId}/redirects/bulk":         "redirect.create",
+	"PUT /projects/{projectId}/deployments/{deployId}/rollout":              "deployment.promote",
+	"POST /projects/{projectId}/deployments/{deployId}/promote":             "deployment.promote",
+	"POST /projects/{projectId}/deployments/{deployId}/rollback":            "deployment.rollback",
+	"GET /projects/{projectId}/settings/general":                            "project.read",
+	"PATCH /projects/{projectId}/settings/general":                          "project.settings",
+	"GET /projects/{projectId}/settings/build":                              "project.read",
+	"PUT /projects/{projectId}/settings/build":                              "project.settings",
+	"GET /projects/{projectId}/settings/git":                                "project.read",
+	"PUT /projects/{projectId}/settings/git":                                "git.settings",
+	"POST /projects/{projectId}/settings/git/sync":                          "git.settings",
+	"GET /projects/{projectId}/crons":                                       "cron.create",
+	"POST /projects/{projectId}/crons":                                      "cron.create",
+	"GET /projects/{projectId}/crons/history":                               "cron.update",
+	"GET /projects/{projectId}/crons/{cronId}":                              "cron.create",
+	"PATCH /projects/{projectId}/crons/{cronId}":                            "cron.update",
+	"DELETE /projects/{projectId}/crons/{cronId}":                           "cron.delete",
+	"POST /projects/{projectId}/crons/{cronId}/run":                         "cron.run",
+	"GET /projects/{projectId}/members":                                     "member.list",
+	"POST /projects/{projectId}/members":                                    "member.invite",
+	"POST /projects/{projectId}/members/invite":                             "member.invite",
+	"PATCH /projects/{projectId}/members/{username}":                        "member.role",
+	"DELETE /projects/{projectId}/members/{username}":                       "member.remove",
+	"GET /projects/{projectId}/drains":                                      "project.settings",
+	"POST /projects/{projectId}/drains":                                     "drain.create",
+	"DELETE /projects/{projectId}/drains/{drainId}":                         "drain.delete",
+	"POST /projects/{projectId}/drains/{drainId}/test":                      "drain.create",
+	"GET /projects/{projectId}/hooks":                                       "project.read",
+	"POST /projects/{projectId}/hooks":                                      "hook.create",
+	"DELETE /projects/{projectId}/hooks/{hookId}":                           "hook.delete",
+	"POST /projects/{projectId}/hooks/{hookId}/trigger":                     "hook.trigger",
+	"GET /projects/{projectId}/firewall/rules":                              "project.read",
+	"POST /projects/{projectId}/firewall/rules":                             "firewall.create",
+	"GET /projects/{projectId}/firewall/rules/{ruleId}":                     "project.read",
+	"PATCH /projects/{projectId}/firewall/rules/{ruleId}":                   "firewall.update",
+	"DELETE /projects/{projectId}/firewall/rules/{ruleId}":                  "firewall.delete",
+	"GET /projects/{projectId}/firewall/events":                             "traffic.read",
+	"GET /projects/{projectId}/firewall/stats":                              "traffic.read",
+	"POST /projects/{projectId}/firewall/whitelist":                         "firewall.create",
+	"GET /projects/{projectId}/cache/stats":                                 "cache.stats",
+	"POST /projects/{projectId}/cache/purge":                                "cache.purge",
+	"POST /projects/{projectId}/cache/purge/path":                           "cache.purge",
+	"GET /projects/{projectId}/analytics/usage":                             "analytics.read",
+	"GET /projects/{projectId}/analytics/usage/timeseries":                  "analytics.read",
+	"GET /projects/{projectId}/analytics/paths":                             "analytics.read",
+	"GET /projects/{projectId}/analytics/status-codes":                      "analytics.read",
+	"GET /projects/{projectId}/analytics/bandwidth":                         "analytics.read",
+	"GET /projects/{projectId}/analytics/requests":                          "analytics.read",
+	"GET /projects/{projectId}/analytics/invocations":                       "analytics.read",
+	"GET /projects/{projectId}/observability/web-vitals":                    "webvital.read",
+	"POST /projects/{projectId}/observability/web-vitals/beacon":            "webvital.read",
+	"GET /projects/{projectId}/observability/web-vitals/timeseries":         "webvital.read",
+	"GET /projects/{projectId}/observability/lcp":                           "webvital.read",
+	"GET /projects/{projectId}/observability/cls":                           "webvital.read",
+	"GET /projects/{projectId}/observability/fid":                           "webvital.read",
+	"GET /projects/{projectId}/deployments/upload":                          "deployment.create",
+	"GET /projects/{projectId}/deployments/{deployId}/source":               "deployment.list",
+	"GET /projects/{projectId}/deployments/{deployId}/og":                   "deployment.list",
+	"GET /projects/{projectId}/dns/records":                                 "domain.list",
+	"POST /projects/{projectId}/domains/{domainId}/reverify":                "domain.verify",
+	"GET /projects/{projectId}/settings/checks":                             "project.read",
+	"POST /projects/{projectId}/settings/checks":                            "project.settings",
+	"GET /projects/{projectId}/settings/rollout":                            "project.read",
+	"PUT /projects/{projectId}/settings/rollout":                            "project.settings",
+	"GET /projects/{projectId}/settings/build-machine":                      "project.read",
+	"PUT /projects/{projectId}/settings/build-machine":                      "project.settings",
+	"POST /projects/{projectId}/settings/ignore-command":                    "git.settings",
+	"GET /projects/{projectId}/settings/framework":                          "project.read",
+	"PATCH /projects/{projectId}/settings/git/toggles":                      "git.settings",
+	"GET /projects/{projectId}/settings/git/lfs":                            "project.read",
+	"PUT /projects/{projectId}/settings/git/lfs":                            "git.settings",
+	"GET /projects/{projectId}/settings/deployment-protection":              "project.read",
+	"PUT /projects/{projectId}/settings/deployment-protection":              "project.settings",
+	"GET /projects/{projectId}/settings/oidc":                               "project.read",
+	"PUT /projects/{projectId}/settings/oidc":                               "project.settings",
+	"GET /projects/{projectId}/settings/functions":                          "git.settings",
+	"PUT /projects/{projectId}/settings/functions":                          "git.settings",
+	"GET /projects/{projectId}/settings/security":                           "project.read",
+	"PUT /projects/{projectId}/settings/security":                           "project.settings",
+	"GET /projects/{projectId}/settings/retention":                          "project.read",
+	"PUT /projects/{projectId}/settings/retention":                          "project.settings",
+	"GET /projects/{projectId}/settings/networking":                         "project.network",
+	"PUT /projects/{projectId}/settings/networking":                         "project.network",
+	"GET /projects/{projectId}/settings/advanced":                           "project.read",
+	"PUT /projects/{projectId}/settings/advanced":                           "project.settings",
+	"GET /projects/{projectId}/settings/passport":                           "project.read",
+	"PUT /projects/{projectId}/settings/passport":                           "project.settings",
+	"GET /projects/{projectId}/settings/microfrontends":                     "project.read",
+	"PUT /projects/{projectId}/settings/microfrontends":                     "project.settings",
+	"GET /projects/{projectId}/environments":                                "project.read",
+	"POST /projects/{projectId}/environments":                               "project.settings",
+	"GET /projects/{projectId}/environments/available":                      "project.read",
+	"GET /projects/{projectId}/environments/{envId}":                        "project.read",
+	"PATCH /projects/{projectId}/environments/{envId}":                      "project.settings",
+	"DELETE /projects/{projectId}/environments/{envId}":                     "project.settings",
+	"POST /projects/{projectId}/environments/{envId}/branch":                "project.settings",
+	"POST /projects/{projectId}/environments/{envId}/domain":                "project.settings",
+	"GET /projects/{projectId}/members/{username}":                          "member.list",
+	"GET /projects/{projectId}/alerts":                                      "project.read",
+	"POST /projects/{projectId}/alerts":                                     "alert.create",
+	"GET /projects/{projectId}/alerts/{alertId}":                            "project.read",
+	"PATCH /projects/{projectId}/alerts/{alertId}":                          "alert.update",
+	"DELETE /projects/{projectId}/alerts/{alertId}":                         "alert.delete",
+	"POST /projects/{projectId}/alerts/{alertId}/silence":                   "alert.silence",
+	"POST /projects/{projectId}/alerts/{alertId}/unsilence":                 "alert.silence",
+	"GET /projects/{projectId}/redirects":                                   "project.read",
+	"POST /projects/{projectId}/redirects":                                  "redirect.create",
+	"DELETE /projects/{projectId}/redirects/{redirectId}":                   "redirect.delete",
+	"PUT /projects/{projectId}/redirects/bulk":                              "redirect.create",
 	// volumes are global paths (not under a project)
-	"GET /volumes":            "volume.read",
-	"POST /volumes":           "volume.create",
-	"GET /volumes/{volumeId}": "volume.read",
-	"DELETE /volumes/{volumeId}": "volume.delete",
+	"GET /volumes":                    "volume.read",
+	"POST /volumes":                   "volume.create",
+	"GET /volumes/{volumeId}":         "volume.read",
+	"DELETE /volumes/{volumeId}":      "volume.delete",
 	"POST /volumes/{volumeId}/resize": "volume.resize",
-	"GET /volumes/{volumeId}/usage":  "volume.read",
+	"GET /volumes/{volumeId}/usage":   "volume.read",
 	// global observability / host / vms
-	"GET /global/analytics":              "analytics.read",
-	"GET /global/analytics/timeseries":   "analytics.read",
-	"GET /usage":                          "analytics.read",
-	"GET /usage/bandwidth":                "analytics.read",
-	"GET /usage/requests":                 "analytics.read",
-	"GET /usage/timeseries":               "analytics.read",
-	"GET /overview":                      "project.read",
-	"GET /host/overview":                 "metric.read",
-	"GET /host/ports":                    "metric.read",
-	"GET /host/kernel":                   "metric.read",
-	"GET /logs":                          "log.read",
-	"GET /traffic":                       "traffic.read",
-	"DELETE /traffic":                    "cache.purge",
-	"GET /traffic/search":                "traffic.read",
-	"GET /images":                        "project.read",
-	"GET /images/search":                 "project.read",
-	"GET /images/stats":                  "project.read",
-	"POST /images/prune":                 "cache.purge",
-	"GET /images/{reference}":            "project.read",
-	"DELETE /images/{reference}":         "project.delete",
-	"GET /vms":                           "replica.list",
-	"GET /vms/{replicaId}":               "replica.list",
-	"POST /vms/{replicaId}/start":        "replica.start",
-	"POST /vms/{replicaId}/stop":         "replica.stop",
-	"POST /vms/{replicaId}/restart":      "replica.restart",
-	"DELETE /vms/{replicaId}":            "replica.delete",
-	"GET /orgs/events":                   "event.read",
-	"GET /projects/{projectId}/builds":                 "build.create",
-	"POST /projects/{projectId}/builds":                "build.create",
-	"POST /projects/{projectId}/builds/run":            "build.create",
-	"GET /projects/{projectId}/builds/{buildId}/logs":  "log.read",
-	"POST /projects/{projectId}/git/import":            "git.import",
-	"POST /projects/{projectId}/deployments/git":       "build.create",
-	"GET /projects/{projectId}/git/branches":           "git.import",
-	"GET /projects/{projectId}/networks":               "project.network",
-	"POST /projects/{projectId}/networks":              "project.network",
-	"GET /projects/{projectId}/services":               "project.read",
-	"GET /projects/{projectId}/services/{serviceName}": "project.read",
+	"GET /global/analytics":                                   "analytics.read",
+	"GET /global/analytics/timeseries":                        "analytics.read",
+	"GET /usage":                                              "analytics.read",
+	"GET /usage/bandwidth":                                    "analytics.read",
+	"GET /usage/requests":                                     "analytics.read",
+	"GET /usage/timeseries":                                   "analytics.read",
+	"GET /replicas":                                           "replica.list",
+	"GET /replicas/{replicaId}":                               "replica.list",
+	"GET /overview":                                           "project.read",
+	"GET /host/overview":                                      "metric.read",
+	"GET /host/ports":                                         "metric.read",
+	"GET /host/kernel":                                        "metric.read",
+	"GET /host/prerequisites":                                 "metric.read",
+	"GET /host/runtime":                                       "metric.read",
+	"GET /logs":                                               "log.read",
+	"GET /traffic":                                            "traffic.read",
+	"DELETE /traffic":                                         "cache.purge",
+	"GET /traffic/search":                                     "traffic.read",
+	"GET /images":                                             "project.read",
+	"GET /images/base":                                        "project.read",
+	"GET /images/base/readiness":                              "project.read",
+	"GET /images/search":                                      "project.read",
+	"GET /images/stats":                                       "project.read",
+	"POST /images/prune":                                      "cache.purge",
+	"GET /images/{reference}":                                 "project.read",
+	"DELETE /images/{reference}":                              "project.delete",
+	"GET /vms":                                                "replica.list",
+	"GET /vms/{replicaId}":                                    "replica.list",
+	"POST /vms/{replicaId}/start":                             "replica.start",
+	"POST /vms/{replicaId}/stop":                              "replica.stop",
+	"POST /vms/{replicaId}/restart":                           "replica.restart",
+	"DELETE /vms/{replicaId}":                                 "replica.delete",
+	"GET /vms/{replicaId}/domains":                            "domain.list",
+	"GET /vms/{replicaId}/logs":                               "log.read",
+	"GET /vms/{replicaId}/logs/stream":                        "log.read",
+	"GET /vms/{replicaId}/metrics":                            "metric.read",
+	"GET /vms/{replicaId}/traffic":                            "traffic.read",
+	"GET /vms/{replicaId}/health":                             "replica.list",
+	"GET /vms/{replicaId}/ssh-info":                           "ssh.connect",
+	"POST /vms/{replicaId}/ssh-cert":                          "ssh.connect",
+	"POST /vms/{replicaId}/exec":                              "replica.exec",
+	"GET /vms/{replicaId}/console":                            "console.open",
+	"GET /orgs/events":                                        "event.read",
+	"GET /projects/{projectId}/builds":                        "build.create",
+	"POST /projects/{projectId}/builds":                       "build.create",
+	"POST /projects/{projectId}/builds/run":                   "build.create",
+	"GET /projects/{projectId}/builds/{buildId}/logs":         "log.read",
+	"GET /projects/{projectId}/builds/{buildId}/logs/stream":  "log.read",
+	"POST /projects/{projectId}/git/import":                   "git.import",
+	"POST /projects/{projectId}/deployments/git":              "build.create",
+	"GET /projects/{projectId}/git/branches":                  "git.import",
+	"GET /projects/{projectId}/networks":                      "project.network",
+	"POST /projects/{projectId}/networks":                     "project.network",
+	"GET /projects/{projectId}/services":                      "project.read",
+	"GET /projects/{projectId}/services/{serviceName}":        "project.read",
 	"POST /projects/{projectId}/services/{serviceName}/scale": "project.scale",
-	"GET /projects/{projectId}/rollouts":               "deployment.list",
+	"GET /projects/{projectId}/rollouts":                      "deployment.list",
 	// org / groups (org-scoped)
-	"GET /orgs":                     "project.read",
-	"POST /orgs":                    "org.member.role",
-	"GET /orgs/default":             "project.read",
-	"GET /orgs/current":             "project.read",
-	"PATCH /orgs/current":           "org.settings",
-	"DELETE /orgs/current":          "org.settings",
-	"GET /orgs/members":             "member.list",
-	"POST /orgs/members":            "org.member.add",
-	"PATCH /orgs/members/{username}": "org.member.role",
-	"DELETE /orgs/members/{username}": "org.member.remove",
-	"GET /orgs/audit":               "org.audit",
-	"POST /orgs/transfer":           "org.transfer",
-	"GET /groups":                 "group.create",
-	"POST /groups":                "group.create",
-	"GET /groups/{groupId}":       "project.read",
-	"PATCH /groups/{groupId}":     "group.update",
-	"DELETE /groups/{groupId}":    "group.delete",
-	"GET /groups/{groupId}/projects": "project.read",
-	"POST /groups/{groupId}/projects/{projectId}": "project.write",
+	"GET /orgs":                                     "project.read",
+	"POST /orgs":                                    "org.member.role",
+	"GET /orgs/default":                             "project.read",
+	"GET /org":                                      "project.read",
+	"PATCH /org":                                    "org.settings",
+	"GET /orgs/current":                             "project.read",
+	"PATCH /orgs/current":                           "org.settings",
+	"DELETE /orgs/current":                          "org.settings",
+	"GET /orgs/members":                             "member.list",
+	"POST /orgs/members":                            "org.member.add",
+	"PATCH /orgs/members/{username}":                "org.member.role",
+	"DELETE /orgs/members/{username}":               "org.member.remove",
+	"GET /orgs/audit":                               "org.audit",
+	"POST /orgs/transfer":                           "org.transfer",
+	"GET /groups":                                   "group.create",
+	"POST /groups":                                  "group.create",
+	"GET /groups/{groupId}":                         "project.read",
+	"PATCH /groups/{groupId}":                       "group.update",
+	"DELETE /groups/{groupId}":                      "group.delete",
+	"GET /groups/{groupId}/projects":                "project.read",
+	"POST /groups/{groupId}/projects/{projectId}":   "project.write",
 	"DELETE /groups/{groupId}/projects/{projectId}": "project.write",
 	// auth / users / servers (global)
-	"GET /users":                "user.list",
-	"POST /users":               "user.create",
-	"DELETE /users/{username}":  "user.delete",
-	"GET /servers":              "server.register",
-	"POST /servers":             "server.register",
-	"GET /servers/{id}":         "server.register",
-	"POST /servers/{id}/heartbeat": "server.register",
-	"GET /servers/{id}/ssh":     "server.register",
-	"DELETE /servers/{id}":      "server.remove",
-	"GET /users/me/api-keys":    "apikey.create",
-	"POST /users/me/api-keys":   "apikey.create",
+	"GET /users":                        "user.list",
+	"POST /users":                       "user.create",
+	"DELETE /users/{username}":          "user.delete",
+	"GET /servers":                      "server.register",
+	"POST /servers":                     "server.register",
+	"GET /servers/{id}":                 "server.register",
+	"POST /servers/{id}/heartbeat":      "server.register",
+	"GET /servers/{id}/ssh":             "server.register",
+	"DELETE /servers/{id}":              "server.remove",
+	"GET /users/me/api-keys":            "apikey.create",
+	"POST /users/me/api-keys":           "apikey.create",
 	"DELETE /users/me/api-keys/{keyId}": "apikey.delete",
 	// RBAC management
-	"GET /roles":                            "org.audit",
-	"POST /roles":                           "org.member.role",
-	"GET /roles/{roleId}":                   "org.audit",
-	"PATCH /roles/{roleId}":                 "org.member.role",
-	"DELETE /roles/{roleId}":                "org.member.role",
-	"GET /permissions":                      "org.audit",
-	"GET /roles/{roleId}/permissions":       "org.audit",
-	"PUT /roles/{roleId}/permissions":       "org.member.role",
-	"POST /roles/{roleId}/permissions/{permissionId}": "org.member.role",
+	"GET /roles":                                        "org.audit",
+	"POST /roles":                                       "org.member.role",
+	"GET /roles/{roleId}":                               "org.audit",
+	"PATCH /roles/{roleId}":                             "org.member.role",
+	"DELETE /roles/{roleId}":                            "org.member.role",
+	"GET /permissions":                                  "org.audit",
+	"GET /roles/{roleId}/permissions":                   "org.audit",
+	"PUT /roles/{roleId}/permissions":                   "org.member.role",
+	"POST /roles/{roleId}/permissions/{permissionId}":   "org.member.role",
 	"DELETE /roles/{roleId}/permissions/{permissionId}": "org.member.role",
 	// feedback (auth-gated; authenticated users can always submit/read)
 	"POST /feedback": "feedback.write",
@@ -1143,17 +1188,10 @@ func (a *API) handleDeleteCurrentOrg(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleListOrgMembers(w http.ResponseWriter, r *http.Request) {
 	orgID := a.orgIDFromHeader(r)
-	members := make([]map[string]any, 0, len(a.store.ListUsers()))
-	for _, u := range a.store.ListUsers() {
-		members = append(members, map[string]any{"user_id": u.ID, "username": u.Username, "role": u.Role})
-	}
-	// The bootstrap admin is always a member.
-	members = append(members, map[string]any{"user_id": a.adminUser, "username": a.adminUser, "role": "owner"})
-	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "members": members})
+	writeJSON(w, http.StatusOK, map[string]any{"org_id": orgID, "members": a.store.ListOrgMembers(orgID)})
 }
 
 func (a *API) handleAddOrgMember(w http.ResponseWriter, r *http.Request) {
-	// Adds a real user account (the org is single-tenant; membership = user list).
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -1167,11 +1205,31 @@ func (a *API) handleAddOrgMember(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = "member"
 	}
-	salt := store.NewID()
-	u := &types.User{ID: store.NewID(), Username: req.Username, Role: req.Role, Salt: salt, PasswordHash: passwordHash(req.Password, salt), CreatedAt: time.Now()}
-	a.store.PutUser(u)
+	if _, ok := a.store.GetRole(req.Role); !ok {
+		writeError(w, http.StatusBadRequest, "unknown role: "+req.Role)
+		return
+	}
+	u, exists := a.store.GetUserByUsername(req.Username)
+	if !exists {
+		if req.Password == "" {
+			writeError(w, http.StatusBadRequest, "password is required when creating a new user")
+			return
+		}
+		salt := store.NewID()
+		u = &types.User{ID: store.NewID(), Username: req.Username, Role: "member", Salt: salt, PasswordHash: passwordHash(req.Password, salt), CreatedAt: time.Now()}
+		a.store.PutUser(u)
+	}
+	orgID := a.orgIDFromHeader(r)
+	if orgID == "" {
+		writeError(w, http.StatusBadRequest, "organization context is required")
+		return
+	}
+	if err := a.store.AddOrgMember(orgID, u.ID, req.Role); err != nil {
+		writeError(w, http.StatusInternalServerError, "add organization member: "+err.Error())
+		return
+	}
 	a.store.AppendDaemonLog(fmt.Sprintf("org member %s added (role %s)", req.Username, req.Role))
-	writeJSON(w, http.StatusCreated, map[string]any{"status": "added", "user": map[string]any{"id": u.ID, "username": u.Username, "role": u.Role}})
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "added", "member": map[string]any{"org_id": orgID, "user_id": u.ID, "username": u.Username, "role": req.Role}})
 }
 
 func (a *API) handlePatchOrgMember(w http.ResponseWriter, r *http.Request) {
@@ -1181,11 +1239,19 @@ func (a *API) handlePatchOrgMember(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = readJSON(r, &req)
 	if u, ok := a.store.GetUserByUsername(username); ok {
-		if req.Role != "" {
-			u.Role = req.Role
-			a.store.PutUser(u)
+		if req.Role == "" {
+			writeError(w, http.StatusBadRequest, "role is required")
+			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "username": username, "role": u.Role})
+		if _, exists := a.store.GetRole(req.Role); !exists {
+			writeError(w, http.StatusBadRequest, "unknown role: "+req.Role)
+			return
+		}
+		if !a.store.SetOrgMemberRole(a.orgIDFromHeader(r), u.ID, req.Role) {
+			writeError(w, http.StatusNotFound, "organization membership not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "username": username, "role": req.Role})
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"status": "user not found", "username": username})
@@ -1194,7 +1260,15 @@ func (a *API) handlePatchOrgMember(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleRemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
 	if u, ok := a.store.GetUserByUsername(username); ok {
-		a.store.DeleteUser(u.ID)
+		org, orgOK := a.store.GetOrg(a.orgIDFromHeader(r))
+		if orgOK && org.OwnerID == u.ID {
+			writeError(w, http.StatusForbidden, "organization owner cannot be removed")
+			return
+		}
+		if !a.store.DeleteOrgMember(a.orgIDFromHeader(r), u.ID) {
+			writeError(w, http.StatusNotFound, "organization membership not found")
+			return
+		}
 		a.store.AppendDaemonLog("org member " + username + " removed")
 		writeJSON(w, http.StatusOK, map[string]any{"status": "removed", "username": username})
 		return
@@ -1376,6 +1450,19 @@ func (a *API) createProjectFrom(w http.ResponseWriter, req createProjectReq) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if req.Image == "" && req.GitURL == "" && a.hostConfig != nil {
+		req.Image = a.hostConfig.BaseImageRef
+	}
+	if req.GitURL == "" {
+		if req.Image == "" {
+			writeError(w, http.StatusBadRequest, "image is required; choose a registered base:// or custom:// microVM image")
+			return
+		}
+		if !a.knownDirectImage(req.Image) {
+			writeError(w, http.StatusUnprocessableEntity, "image is not a registered direct Firecracker manifest; Docker/OCI references are not bootable")
+			return
+		}
+	}
 	if req.Replicas < 1 {
 		req.Replicas = 1
 	}
@@ -1451,6 +1538,25 @@ func (a *API) createProjectFrom(w http.ResponseWriter, req createProjectReq) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"project": proj, "status": "deploying"})
 }
 
+func (a *API) knownDirectImage(ref string) bool {
+	if strings.HasPrefix(ref, "docker://") || strings.HasPrefix(ref, "oci://") || strings.Contains(ref, "@sha256:") {
+		return false
+	}
+	for _, gi := range a.store.ListGoldenImages() {
+		if gi.Image == ref || gi.Name == ref {
+			return true
+		}
+	}
+	if a.catalog != nil {
+		for _, manifest := range a.catalog.All() {
+			if manifest.Image == ref || manifest.ID == ref || manifest.Name == ref {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 	// unchanged ...
 	vmID := store.NewID()
@@ -1480,6 +1586,21 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		CreatedAt:    time.Now(),
 	}
 	a.applyImageManifest(vm)
+	if vm.Kernel == "" && a.hostConfig != nil {
+		vm.Kernel = a.hostConfig.KernelImage
+	}
+	if vm.RootfsPath == "" || vm.Kernel == "" {
+		vm.State = types.StateFailed
+		vm.Error = "direct Firecracker deploy requires a registered image with readable rootfs.ext4 and vmlinux artifacts"
+		a.store.PutVM(vm)
+		return
+	}
+	if report, err := imagecatalog.ValidateArtifacts(vm.RootfsPath, vm.Kernel); err != nil {
+		vm.State = types.StateFailed
+		vm.Error = "image artifact validation failed: " + report.Error
+		a.store.PutVM(vm)
+		return
+	}
 	a.store.PutVM(vm)
 	if proj.VMIDs == nil {
 		proj.VMIDs = []string{}
@@ -1511,16 +1632,15 @@ func (a *API) secretsEnv(proj *types.Project) map[string]string {
 	return merged
 }
 
-// applyImageManifest fills VM fields from a custom (user-uploaded microVM)
-// golden image: rootfs + kernel host paths and the default vCPU/memory spec.
-// OCI image references are left untouched (containerd boots them).
+// applyImageManifest fills VM fields from a direct Firecracker golden image:
+// rootfs + kernel host paths and the default vCPU/memory spec. Images without
+// a rootfs remain unresolved and are rejected by bootReplica.
 func (a *API) applyImageManifest(vm *types.VM) {
-	if vm == nil || !strings.HasPrefix(vm.Image, "custom://") {
+	if vm == nil {
 		return
 	}
-	ref := strings.TrimPrefix(vm.Image, "custom://")
 	for _, gi := range a.store.ListGoldenImages() {
-		if gi.Image == "custom://"+ref || gi.Name == ref {
+		if gi.Image == vm.Image || gi.Name == vm.Image || gi.Image == "custom://"+strings.TrimPrefix(vm.Image, "custom://") {
 			vm.RootfsPath = gi.Rootfs
 			vm.Kernel = gi.Kernel
 			if vm.VCPUs == 0 {
@@ -1530,6 +1650,21 @@ func (a *API) applyImageManifest(vm *types.VM) {
 				vm.MemMiB = gi.MemMiB
 			}
 			return
+		}
+	}
+	if a.catalog != nil {
+		for _, manifest := range a.catalog.All() {
+			if manifest.Image == vm.Image || manifest.ID == vm.Image || manifest.Name == vm.Image {
+				vm.RootfsPath = manifest.Rootfs
+				vm.Kernel = manifest.Kernel
+				if vm.VCPUs == 0 {
+					vm.VCPUs = manifest.VCPUs
+				}
+				if vm.MemMiB == 0 {
+					vm.MemMiB = manifest.MemMiB
+				}
+				return
+			}
 		}
 	}
 }
@@ -1643,13 +1778,10 @@ func (a *API) handleImportProject(w http.ResponseWriter, r *http.Request) {
 // Project members – use username instead of userId
 // ----------------------------------------------------------------------------
 
-// memberOf resolves a project member's user id for the current request user
-// (header, else admin). Memberships are persisted in project_members.
+// memberOf resolves a project member's user id for the authenticated request.
+// Memberships are persisted in project_members.
 func (a *API) memberUserID(r *http.Request) string {
-	if uid := r.Header.Get(HeaderUserID); uid != "" {
-		return uid
-	}
-	return a.adminUser
+	return currentUser(r)
 }
 
 func (a *API) handleGetProjectMember(w http.ResponseWriter, r *http.Request) {

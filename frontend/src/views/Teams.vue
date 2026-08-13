@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted } from "vue";
-import { api } from "../api/client";
+import { computed, ref, onMounted } from "vue";
+import { api, getOrgId, setOrgId } from "../api/client";
 
 const tab = ref("orgs");
 const error = ref("");
@@ -21,6 +21,8 @@ const roles = ref([]);
 const permissions = ref([]);
 const rolePerms = ref({});
 const newRole = ref({ id: "", name: "", description: "" });
+const activeOrgId = ref(getOrgId());
+const roleChoices = computed(() => roles.value.length ? roles.value : [{ id: "member" }, { id: "admin" }, { id: "owner" }, { id: "super_admin" }]);
 
 const TABS = ["orgs", "groups", "members", "users", "apikeys", "roles"];
 
@@ -30,14 +32,23 @@ async function load() {
     const [o, g, m, u, k] = await Promise.allSettled([
       api("/orgs"), api("/groups"), api("/orgs/members"), api("/users"), api("/users/me/api-keys"),
     ]);
-    orgs.value = o.status === "fulfilled" ? o.value || [] : [];
-    groups.value = g.status === "fulfilled" && g.value ? (g.value.groups || g.value) : [];
+		orgs.value = o.status === "fulfilled" ? o.value || [] : [];
+		if (!activeOrgId.value && orgs.value.length) {
+			activeOrgId.value = (orgs.value.find((org) => org.is_default) || orgs.value[0]).id;
+			setOrgId(activeOrgId.value);
+		}
+		groups.value = g.status === "fulfilled" && g.value ? (g.value.groups || g.value) : [];
     members.value = m.status === "fulfilled" && m.value ? (m.value.members || []) : [];
     users.value = u.status === "fulfilled" ? u.value || [] : [];
     apiKeys.value = k.status === "fulfilled" ? k.value || [] : [];
   } catch (e) {
     error.value = e.message;
-  }
+	}
+}
+
+function selectOrg() {
+	setOrgId(activeOrgId.value);
+	load();
 }
 
 async function createOrg() {
@@ -53,10 +64,21 @@ async function createGroup() {
   load();
 }
 async function addMember() {
-  if (!newMember.value.username.trim()) return;
-  await api("/orgs/members", { method: "POST", body: JSON.stringify(newMember.value) });
-  newMember.value = { username: "", role: "member" };
-  load();
+	if (!newMember.value.username.trim()) return;
+	await api("/orgs/members", { method: "POST", body: JSON.stringify(newMember.value) });
+	newMember.value = { username: "", role: "member" };
+	load();
+}
+
+async function updateMember(member) {
+	await api(`/orgs/members/${encodeURIComponent(member.username)}`, { method: "PATCH", body: JSON.stringify({ role: member.role }) });
+	load();
+}
+
+async function removeMember(member) {
+	if (!confirm(`Remove ${member.username} from this organization?`)) return;
+	await api(`/orgs/members/${encodeURIComponent(member.username)}`, { method: "DELETE" });
+	load();
 }
 async function addUser() {
   if (!newUser.value.username.trim() || !newUser.value.password) return;
@@ -65,11 +87,23 @@ async function addUser() {
   load();
 }
 async function addKey() {
-  if (!newKeyName.value.trim()) return;
-  const res = await api("/users/me/api-keys", { method: "POST", body: JSON.stringify({ name: newKeyName.value.trim() }) });
-  keyToken.value = res.token;
-  newKeyName.value = "";
-  load();
+	if (!newKeyName.value.trim()) return;
+	const res = await api("/users/me/api-keys", { method: "POST", body: JSON.stringify({ name: newKeyName.value.trim() }) });
+	keyToken.value = res.token;
+	newKeyName.value = "";
+	load();
+}
+
+async function deleteKey(key) {
+	if (!confirm(`Revoke API key "${key.name}"?`)) return;
+	await api(`/users/me/api-keys/${key.id}`, { method: "DELETE" });
+	load();
+}
+
+async function deleteUser(user) {
+	if (!confirm(`Delete user "${user.username}"? This removes the account, not just one membership.`)) return;
+	await api(`/users/${encodeURIComponent(user.username)}`, { method: "DELETE" });
+	load();
 }
 
 async function loadRoles() {
@@ -130,7 +164,8 @@ onMounted(() => { load(); loadRoles(); });
     </div>
   </div>
 
-  <div v-if="error" class="error-box">{{ error }}</div>
+	<div v-if="error" class="error-box">{{ error }}</div>
+	<div v-if="orgs.length" class="filter-bar"><label class="hint">Active organization</label><select v-model="activeOrgId" @change="selectOrg"><option v-for="org in orgs" :key="org.id" :value="org.id">{{ org.name }}{{ org.is_default ? ' · default' : '' }}</option></select></div>
 
   <div class="seg" style="margin-bottom:18px">
     <button v-for="t in TABS" :key="t" :class="{ active: tab === t }" @click="tab = t">{{ t }}</button>
@@ -178,14 +213,14 @@ onMounted(() => { load(); loadRoles(); });
   <div v-if="tab === 'members'">
     <div class="filter-bar">
       <input v-model="newMember.username" placeholder="Username" />
-      <select v-model="newMember.role"><option value="member">member</option><option value="admin">admin</option></select>
+		<select v-model="newMember.role"><option v-for="role in roleChoices" :key="role.id" :value="role.id">{{ role.id }}</option></select>
       <button class="btn btn-sm btn-primary" @click="addMember">+ Invite</button>
     </div>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>User</th><th>Role</th></tr></thead>
         <tbody>
-          <tr v-for="(m, i) in members" :key="i"><td>{{ m.username }}</td><td><span class="tag">{{ m.role }}</span></td></tr>
+		<tr v-for="(m, i) in members" :key="m.user_id || i"><td>{{ m.username }}</td><td><select v-model="m.role"><option v-for="role in roleChoices" :key="role.id" :value="role.id">{{ role.id }}</option></select></td><td><button class="btn btn-sm" @click="updateMember(m)">Save</button><button class="btn btn-sm" @click="removeMember(m)">Remove</button></td></tr>
           <tr v-if="!members.length"><td colspan="2" class="hint" style="text-align:center; padding:18px">No members yet.</td></tr>
         </tbody>
       </table>
@@ -197,7 +232,7 @@ onMounted(() => { load(); loadRoles(); });
     <div class="filter-bar">
       <input v-model="newUser.username" placeholder="Username" />
       <input v-model="newUser.password" type="password" placeholder="Password" />
-      <select v-model="newUser.role"><option value="member">member</option><option value="admin">admin</option></select>
+		<select v-model="newUser.role"><option v-for="role in roleChoices" :key="role.id" :value="role.id">{{ role.id }}</option></select>
       <button class="btn btn-sm btn-primary" @click="addUser">+ Add User</button>
     </div>
     <div class="table-wrap">
@@ -207,7 +242,7 @@ onMounted(() => { load(); loadRoles(); });
           <tr v-for="u in users" :key="u.id">
             <td>{{ u.username }}</td>
             <td><span class="tag" :class="u.role === 'admin' ? 'tag-accent' : ''">{{ u.role }}</span></td>
-            <td class="num muted">{{ new Date(u.created_at).toLocaleDateString() }}</td>
+			<td class="num muted">{{ new Date(u.created_at).toLocaleDateString() }}</td><td><button class="btn btn-sm" @click="deleteUser(u)">Delete</button></td>
           </tr>
           <tr v-if="!users.length"><td colspan="3" class="hint" style="text-align:center; padding:18px">No users yet.</td></tr>
         </tbody>
@@ -228,7 +263,7 @@ onMounted(() => { load(); loadRoles(); });
       <table class="data-table">
         <thead><tr><th>Name</th><th>Created</th></tr></thead>
         <tbody>
-          <tr v-for="k in apiKeys" :key="k.id"><td>{{ k.name }}</td><td class="num muted">{{ new Date(k.created_at).toLocaleDateString() }}</td></tr>
+		<tr v-for="k in apiKeys" :key="k.id"><td>{{ k.name }}</td><td class="num muted">{{ new Date(k.created_at).toLocaleDateString() }}</td><td><button class="btn btn-sm" @click="deleteKey(k)">Revoke</button></td></tr>
           <tr v-if="!apiKeys.length"><td colspan="2" class="hint" style="text-align:center; padding:18px">No API keys yet.</td></tr>
         </tbody>
       </table>

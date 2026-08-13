@@ -11,13 +11,14 @@ ALTER TABLE domains DROP CONSTRAINT IF EXISTS domains_status_check;
 ALTER TABLE golden_images ADD COLUMN IF NOT EXISTS data JSONB;
 
 -- 0016: seed the golden-image library (redis / postgresql / mysql) so the
--- dashboard's image picker is useful on a fresh install. OCI refs boot via
--- containerd + the aws.firecracker shim. Idempotent: ON CONFLICT (name).
+-- dashboard's image picker has examples on a fresh install. These rows are
+-- metadata placeholders until a matching direct rootfs/kernel artifact is
+-- registered. Idempotent: ON CONFLICT (name).
 INSERT INTO golden_images (id, name, image, description, vcpus, mem_mib, ports, env, tags, logo, version, data, created_at)
 VALUES
-  (gen_random_uuid(), 'redis',     'redis:7-alpine',    'Redis 7 (OCI image, boots via containerd)',    1, 256, '[{"container_port":6379}]'::jsonb, '{}'::jsonb, ARRAY['cache','redis'],     '', 'v1', '{"name":"redis","image":"redis:7-alpine","vcpus":1,"mem_mib":256,"ports":[{"container_port":6379}]}'::jsonb, now()),
-  (gen_random_uuid(), 'postgresql','postgres:16-alpine','PostgreSQL 16 (OCI image, boots via containerd)',1, 512, '[{"container_port":5432}]'::jsonb, '{}'::jsonb, ARRAY['db','postgres'],    '', 'v1', '{"name":"postgresql","image":"postgres:16-alpine","vcpus":1,"mem_mib":512,"ports":[{"container_port":5432}]}'::jsonb, now()),
-  (gen_random_uuid(), 'mysql',     'mysql:8',           'MySQL 8 (OCI image, boots via containerd)',     1, 512, '[{"container_port":3306}]'::jsonb, '{}'::jsonb, ARRAY['db','mysql'],       '', 'v1', '{"name":"mysql","image":"mysql:8","vcpus":1,"mem_mib":512,"ports":[{"container_port":3306}]}'::jsonb, now())
+	  (gen_random_uuid(), 'redis',     'custom://redis',    'Redis 7 direct image metadata; register rootfs.ext4 + vmlinux before deploy',    1, 256, '[{"container_port":6379}]'::jsonb, '{}'::jsonb, ARRAY['cache','redis'],     '', 'v1', '{"name":"redis","image":"custom://redis","vcpus":1,"mem_mib":256,"ports":[{"container_port":6379}]}'::jsonb, now()),
+	  (gen_random_uuid(), 'postgresql','custom://postgresql','PostgreSQL direct image metadata; register rootfs.ext4 + vmlinux before deploy',1, 512, '[{"container_port":5432}]'::jsonb, '{}'::jsonb, ARRAY['db','postgres'],    '', 'v1', '{"name":"postgresql","image":"custom://postgresql","vcpus":1,"mem_mib":512,"ports":[{"container_port":5432}]}'::jsonb, now()),
+	  (gen_random_uuid(), 'mysql',     'custom://mysql',   'MySQL direct image metadata; register rootfs.ext4 + vmlinux before deploy',     1, 512, '[{"container_port":3306}]'::jsonb, '{}'::jsonb, ARRAY['db','mysql'],       '', 'v1', '{"name":"mysql","image":"custom://mysql","vcpus":1,"mem_mib":512,"ports":[{"container_port":3306}]}'::jsonb, now())
 ON CONFLICT (name) DO NOTHING;
 
 -- 0017: durable daemon/audit log. The in-memory ring stays the fast path for
@@ -95,4 +96,3 @@ CREATE TABLE IF NOT EXISTS daemon_logs_history (
 -- store.PutGoldenImage persists the full manifest as a JSONB `data` blob; the
 -- original golden_images table lacked that column. Add it additively.
 ALTER TABLE golden_images ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}';
-

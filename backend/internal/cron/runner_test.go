@@ -12,16 +12,16 @@ func TestMatches(t *testing.T) {
 		expr string
 		want bool
 	}{
-		{"42 9 14 8 5", true},  // exact
-		{"42 9 14 8 0", false}, // 0 = Sunday, fixed day is Friday (5)
-		{"42 9 * * *", true},   // every day
-		{"* * * * *", true},    // every minute
-		{"*/2 * * * *", true},  // 42 % 2 == 0
-		{"*/5 * * * *", false}, // 42 % 5 != 0
-		{"0 9 14 8 5", false},  // wrong minute
-		{"42 10 * * *", false}, // wrong hour
-		{"1-30 * * * *", false},// 42 outside range
-		{"bad", false},         // invalid
+		{"42 9 14 8 5", true},   // exact
+		{"42 9 14 8 0", false},  // 0 = Sunday, fixed day is Friday (5)
+		{"42 9 * * *", true},    // every day
+		{"* * * * *", true},     // every minute
+		{"*/2 * * * *", true},   // 42 % 2 == 0
+		{"*/5 * * * *", false},  // 42 % 5 != 0
+		{"0 9 14 8 5", false},   // wrong minute
+		{"42 10 * * *", false},  // wrong hour
+		{"1-30 * * * *", false}, // 42 outside range
+		{"bad", false},          // invalid
 	}
 	for _, tt := range tests {
 		if got := Matches(tt.expr, fixed); got != tt.want {

@@ -15,7 +15,7 @@
    POST /login
    Content-Type: application/json
 
-   { "username": "admin", "password": "<porter.toml [admin] password>" }
+   { "username": "admin", "password": "<database-seeded bootstrap password>" }
    ```
    → `{ "token": "<64-hex>", "user": { "username": "admin", "role": "admin" } }`
 
@@ -82,11 +82,11 @@
 | POST | `/auth/login` | none | Canonical login endpoint |
 | POST | `/auth/logout` | none | Logout (no-op; tokens are stateless) |
 | POST | `/auth/signup` | none | Single-tenant notice (returns 201 + note) |
-| POST | `/auth/password/forgot` | none | Reports reset path for config-admin (no email backend) |
-| POST | `/auth/password/reset` | none | Same — reset via `porter.toml [admin] password` |
+| POST | `/auth/password/forgot` | none | Reports the currently supported password-recovery boundary (no email backend) |
+| POST | `/auth/password/reset` | none | Resets a persisted user password when the configured recovery flow is available |
 | GET | `/auth/session` | token | Session check `{ "authenticated": true, "username": "..." }` |
 | GET | `/users/me` | token | Current user profile |
-| PATCH | `/users/me` | token | Update profile (note: config-admin not persisted) |
+| PATCH | `/users/me` | token | Update the persisted current-user profile |
 | DELETE | `/users/me` | token | Deletion blocked for bootstrap admin |
 | GET | `/users/me/api-keys` | token | List my API keys |
 | POST | `/users/me/api-keys` | token | Create API key `{ "name" }` → returns `{ "token" }` once |
@@ -101,8 +101,10 @@ POST /auth/login
 { "token": "abc...", "user": { "username": "admin", "role": "admin" } }
 ```
 
-**Per-user tokens:** additional users created via `POST /users` each get their
-own API token on login, resolving to their RBAC role (admin/member/viewer).
+**Per-user tokens:** users created through the organization/user endpoints each
+authenticate against persisted password hashes and receive authorization from
+their database-backed RBAC role (admin/member/viewer). There is no shared
+TOML token or hardcoded admin fallback.
 
 ---
 

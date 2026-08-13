@@ -1,26 +1,26 @@
-# Porter local config — real microVM boots (containerd + aws.firecracker).
-# Fill in real secrets. Every key can be overridden by a PORTER_* env var.
-# Overlayfs snapshotter (works in WSL2; devmapper needs the dm kernel module).
+# Porter local config — direct Firecracker microVM boots.
+# Runtime configuration only. Credentials are seeded in PostgreSQL; provide
+# PORTER_BOOTSTRAP_ADMIN_PASSWORD once and PORTER_SECRET_KEY through the
+# process environment, never in this TOML file.
 
 [server]
 listen_addr = ":8080"
 base_domain = "porter.test"
-api_token   = "arsfgvdfxgvesrdfgvsedzxgq3erasdfvezs"      # CHANGE ME — dashboard login returns this as the bearer token
 
 [database]
 url          = "postgres://porter:porter@localhost:5432/porter?sslmode=disable"
 auto_migrate = true
 
 [firecracker]
-containerd_socket = "/run/containerd/containerd.sock"
-snapshotter       = "devmapper"   # WSL2-friendly; switch to devmapper on a full Linux host if provisioned
-namespace         = "porter"
-logs_dir          = "/var/log/porter"
-images_dir        = "vms/images"
-
-[admin]
-username = "admin"
-password = "change-me"      
+runtime_mode       = "direct"
+base_image_ref     = "base://default"
+api_socket_dir     = "/run/porter/firecracker"
+kernel_image       = "/var/lib/porter/vmlinux"
+rootfs_path        = "/var/lib/porter/rootfs.ext4"
+firecracker_bin    = "firecracker"
+logs_dir           = "/var/log/porter"
+images_dir         = "vms/images"
+custom_images_dir  = "vms/custom"
 
 [gateway]
 enabled     = true

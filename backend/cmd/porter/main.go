@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,22 +22,22 @@ import (
 	"porter/internal/api"
 	"porter/internal/cache"
 	"porter/internal/config"
+	cronrunner "porter/internal/cron"
 	"porter/internal/dns"
 	"porter/internal/event"
 	"porter/internal/gateway"
 	"porter/internal/health"
 	"porter/internal/imagecatalog"
+	"porter/internal/metrics"
 	"porter/internal/netmgr"
 	"porter/internal/notify"
 	rt "porter/internal/runtime"
 	"porter/internal/sshgw"
 	"porter/internal/startup"
-	portertls "porter/internal/tls"
 	"porter/internal/store"
+	portertls "porter/internal/tls"
 	"porter/internal/types"
 	"porter/internal/volumes"
-	cronrunner "porter/internal/cron"
-	"porter/internal/metrics"
 )
 
 // Version is overridden at build time with -ldflags "-X main.Version=..."
@@ -119,8 +120,8 @@ func runServer(args []string) int {
 		log.Fatalf("config error: %v", err)
 	}
 
-	// Startup sanity check: fail loudly now if the runtime prerequisites
-	// (containerd, KVM, firecracker) look misconfigured, not on first VM boot.
+	// Startup sanity check: report direct Firecracker prerequisites before the
+	// first VM boot instead of hiding host failures behind an API request.
 	for _, c := range startup.Check(cfg) {
 		status := "OK  "
 		if !c.OK {
@@ -134,6 +135,9 @@ func runServer(args []string) int {
 
 	st := store.NewStore(cfg.DatabaseURL)
 	defer st.Close()
+	if err := st.EnsureSeededAdmin(cfg.BootstrapAdminPassword); err != nil {
+		log.Fatalf("auth bootstrap error: %v", err)
+	}
 
 	// Optional Redis read-through cache for hot read paths (config [cache]).
 	if cfg.CacheEnabled && cfg.CacheURL != "" {
@@ -151,12 +155,12 @@ func runServer(args []string) int {
 	hub := event.NewHub()
 
 	vmm := newVMEngine(rt.FCConfig{
-		ContainerdSocket: cfg.ContainerdSocket,
-		Snapshotter:      cfg.Snapshotter,
-		Namespace:        cfg.Namespace,
-		LogsDir:          cfg.LogsDir,
-		BareKernel:       cfg.KernelImage,
-		FirecrackerBin:   cfg.FirecrackerBin,
+		Mode:           rt.Mode(cfg.RuntimeMode),
+		FirecrackerBin: cfg.FirecrackerBin,
+		KernelImage:    cfg.KernelImage,
+		RootfsPath:     cfg.RootfsPath,
+		SocketDir:      cfg.FirecrackerSocketDir,
+		LogsDir:        cfg.LogsDir,
 	}, st, hub)
 	defer vmm.Close()
 
@@ -171,8 +175,19 @@ func runServer(args []string) int {
 
 	netMgr := netmgr.NewNetManager()
 	catalog := imagecatalog.New(cfg.ImagesDir)
-	a := api.NewAPI(st, hub, vmm, netMgr, catalog, cfg.APIToken, cfg.BaseDomain, cfg.AdminUsername, cfg.AdminPassword, Version)
+	if cfg.BaseImageRef != "" {
+		baseName := strings.TrimPrefix(cfg.BaseImageRef, "base://")
+		if baseName == "" {
+			baseName = "default"
+		}
+		base := imagecatalog.ManifestFromArtifacts(baseName, cfg.BaseImageRef, "Configured Porter base microVM image", "base", cfg.RootfsPath, cfg.KernelImage, 1, 256)
+		if err := st.PutGoldenImage(base); err != nil {
+			log.Fatalf("base image registration error: %v", err)
+		}
+	}
+	a := api.NewAPI(st, hub, vmm, netMgr, catalog, cfg.SecretKey, cfg.BaseDomain, Version)
 	a.SetCustomImagesDir(cfg.CustomImagesDir)
+	a.SetHostConfig(cfg)
 	a.SetRateLimit(cfg.RateLimitPerMin)
 
 	// Domain auto-assignment: create preview/prod domains for new projects.
@@ -291,9 +306,8 @@ func runServer(args []string) int {
 		}
 	}
 
-	// SSH gateway: terminates SSH (short-lived CA-signed certs) and bridges
-	// sessions into OCI VMs via containerd task.Exec (vmEngine.Exec). No sshd
-	// inside the guest. Binds only when [ssh] enabled.
+	// SSH gateway remains opt-in. Direct Firecracker VMs currently expose no
+	// task.Exec bridge; a future guest-vsock agent can back this interface.
 	if cfg.SSHEnabled {
 		sg, err := sshgw.New(sshgw.Config{
 			ListenAddr: cfg.SSHListenAddr,
@@ -338,11 +352,7 @@ func runServer(args []string) int {
 	log.Printf("Dashboard: http://localhost%s", cfg.ListenAddr)
 	log.Printf("Database: %s  Config: %s", cfg.DatabaseURL, configPath)
 	st.AppendDaemonLog(fmt.Sprintf("=== Porter %s started  pid=%d  http://localhost%s ===", Version, os.Getpid(), cfg.ListenAddr))
-	if _, serr := os.Stat(cfg.ContainerdSocket); serr != nil {
-		log.Printf("WARNING: containerd socket not found at %s (%v) — real VM boots will fail until containerd is running.", cfg.ContainerdSocket, serr)
-	} else {
-		log.Printf("containerd ready at %s (snapshotter=%s, namespace=%s).", cfg.ContainerdSocket, cfg.Snapshotter, cfg.Namespace)
-	}
+	log.Printf("runtime: direct Firecracker over per-VM Unix sockets in %s", cfg.FirecrackerSocketDir)
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
@@ -377,12 +387,9 @@ func runServer(args []string) int {
 }
 
 // ----------------------------------------------------------------------
-// vmEngine — adapts the direct-Firecracker runtime.VMManager to the API's
-// VMRunner interface. It hands each VM a per-project /24 subnet + static IP
-// + MAC + host tap device, then lets the runtime boot it: bare (rootfs)
-// images are booted by spawning `firecracker` directly; OCI images go
-// through containerd (aws.firecracker shim); bare (rootfs) images boot a
-// `firecracker` process directly.
+// vmEngine adapts the direct-Firecracker runtime.VMManager to the API's
+// VMRunner interface. It hands each VM a per-project /24 subnet + static IP,
+// MAC, and host TAP device, then lets the runtime boot a kernel + rootfs.ext4.
 // ----------------------------------------------------------------------
 type vmEngine struct {
 	rt   *rt.VMManager
@@ -407,7 +414,10 @@ func (e *vmEngine) Boot(ctx context.Context, vm *types.VM) error {
 		subnet = e.net.AllocateProjectSubnet()
 		e.subs[vm.ProjectID] = subnet
 	}
-	spec := e.net.AllocateVMNetwork(subnet, vm.ReplicaIndex, vm.ID)
+	spec, err := e.net.AllocateVMNetwork(subnet, vm.ReplicaIndex, vm.ID)
+	if err != nil {
+		return fmt.Errorf("boot: configure direct Firecracker network: %w", err)
+	}
 	e.rt.Boot(vm, spec)
 	return nil
 }
@@ -431,8 +441,7 @@ func (e *vmEngine) Delete(ctx context.Context, vm *types.VM) error {
 	return e.Stop(ctx, vm)
 }
 
-// Exec satisfies sshgw.Execer: bridge an SSH session into a containerd-booted
-// VM's task (OCI images). Bare (direct-Firecracker) VMs return an error.
+// Exec satisfies sshgw.Execer with the current direct-runtime limitation.
 func (e *vmEngine) Exec(ctx context.Context, vmID string, stdin, stdout interface{}) error {
 	return e.rt.Exec(ctx, vmID, stdin, stdout)
 }

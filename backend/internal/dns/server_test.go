@@ -23,7 +23,7 @@ func (s *testStore) GetVM(id string) (*types.VM, bool) {
 	return nil, false
 }
 
-func (s *testStore) ListVMs() []*types.VM       { return s.vms }
+func (s *testStore) ListVMs() []*types.VM           { return s.vms }
 func (s *testStore) ListProjects() []*types.Project { return s.projects }
 
 func (s *testStore) ListDomains(projectID string) []*types.Domain {

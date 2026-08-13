@@ -1,6 +1,5 @@
-// Package startup verifies the host runtime prerequisites at boot so a
-// misconfigured containerd/jailer/firecracker setup fails loudly at startup
-// instead of only surfacing as the first VM boot failing.
+// Package startup verifies direct Firecracker host prerequisites at boot so a
+// missing KVM, VMM, kernel, or socket directory is visible before first boot.
 package startup
 
 import (
@@ -23,7 +22,7 @@ type Result struct {
 // are reported but don't stop startup; fatal ones are meant to stop it.
 func Check(cfg *config.Config) []Result {
 	var out []Result
-	out = append(out, checkContainerd(cfg))
+	out = append(out, checkSocketDir(cfg))
 	out = append(out, checkKVM())
 	out = append(out, checkFirecracker(cfg))
 	out = append(out, checkJailer(cfg))
@@ -31,16 +30,16 @@ func Check(cfg *config.Config) []Result {
 	return out
 }
 
-// checkContainerd verifies the containerd socket is present and reachable.
-func checkContainerd(cfg *config.Config) Result {
-	if cfg.ContainerdSocket == "" {
-		return Result{Name: "containerd-socket", OK: false, Message: "no containerd socket configured", Fatal: true}
+// checkSocketDir verifies that the directory for per-VM Firecracker API
+// sockets can be created. The VMM creates each socket when it starts.
+func checkSocketDir(cfg *config.Config) Result {
+	if cfg.FirecrackerSocketDir == "" {
+		return Result{Name: "firecracker-api-socket-dir", OK: false, Message: "no Firecracker API socket directory configured", Fatal: true}
 	}
-	if _, err := os.Stat(cfg.ContainerdSocket); err != nil {
-		return Result{Name: "containerd-socket", OK: false, Message: fmt.Sprintf("%v — real VM boots will fail", err)}
+	if err := os.MkdirAll(cfg.FirecrackerSocketDir, 0o755); err != nil {
+		return Result{Name: "firecracker-api-socket-dir", OK: false, Message: fmt.Sprintf("cannot create %s: %v", cfg.FirecrackerSocketDir, err)}
 	}
-	// A daemon on a Unix socket responds to a version ping over its own socket.
-	return Result{Name: "containerd-socket", OK: true, Message: cfg.ContainerdSocket}
+	return Result{Name: "firecracker-api-socket-dir", OK: true, Message: cfg.FirecrackerSocketDir}
 }
 
 // checkKVM verifies hardware virtualization is available for microVMs.
@@ -76,7 +75,7 @@ func checkFirecracker(cfg *config.Config) Result {
 // concern worth surfacing loudly at startup.
 func checkJailer(cfg *config.Config) Result {
 	if cfg.JailerBin == "" {
-		return Result{Name: "jailer", OK: true, Message: "not explicitly configured (containerd shim manages its own)"}
+		return Result{Name: "jailer", OK: true, Message: "not explicitly configured; direct Firecracker runs with the configured VMM process"}
 	}
 	if _, err := os.Stat(cfg.JailerBin); err != nil {
 		return Result{Name: "jailer", OK: false, Message: fmt.Sprintf("configured jailer %q missing: %v — workloads may run without jailer isolation", cfg.JailerBin, err)}

@@ -1,481 +1,261 @@
 #!/usr/bin/env bash
-# ============================================================================
-#  Porter DEV installer — local dev/testing variant of backend/deploy/install.sh
+# Porter v1.0.0-beta-dev installer: direct Firecracker + PostgreSQL.
 #
-#   bash backend/deploy/dev-install.sh
-#
-#  Differences from the production installer:
-#   - PostgreSQL runs in Docker (named container, persistent volume), not on
-#     the host.
-#   - Go binary is built and run from a project-local ./.dev directory, not
-#     /usr/local/bin — no system-wide install of the porter binary itself.
-#   - firecracker / containerd / CNI still install to real system paths,
-#     because that's the thing under test — but every step checks state
-#     first and skips if already satisfied. Nothing is blindly reinstalled.
-#   - No systemd unit. You run porter in the foreground (or via `dev-install.sh
-#     run`) so you can see logs / iterate quickly.
-#   - Root is only required for the containerd/firecracker/CNI/KVM steps.
-#     Those are skipped (with a clear warning) if not run as root, so you can
-#     still use this script to just stand up Postgres + build the binary.
-#
-#  Usage:
-#    bash backend/deploy/dev-install.sh          # install / check everything
-#    bash backend/deploy/dev-install.sh run       # build (if needed) + run porter
-#    bash backend/deploy/dev-install.sh status    # print state of every component
-#    bash backend/deploy/dev-install.sh nuke      # tear down dev state (asks first)
-#
-#  Env overrides: PG_PORT, PG_PASSWORD, POOL_SIZE, FIRECRACKER_VERSION,
-#                 KERNEL_PATH, PORTER_API_TOKEN
-# ============================================================================
+# This script intentionally does not install or configure containerd, an OCI
+# runtime, a Firecracker shim, or CNI plugins. Porter owns one TAP device per
+# VM and configures the official Firecracker HTTP API through per-VM Unix
+# sockets. PostgreSQL is kept in a local Docker container for development only.
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Paths — everything dev-related lives under the repo, not system dirs.
-# ---------------------------------------------------------------------------
-BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEV_DIR="$BACKEND_DIR/.dev"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND_DIR="$REPO_DIR/backend"
+DEV_DIR="$REPO_DIR/.dev"
 BIN_DIR="$DEV_DIR/bin"
-STATE_DIR="$DEV_DIR/state"          # thin-data / thin-meta / kernel live here
+STATE_DIR="$DEV_DIR/state"
 LOG_DIR="$DEV_DIR/logs"
 CONF_DIR="$DEV_DIR/conf"
-CNI_BIN_DIR="/opt/cni/bin"          # still a system path — CNI plugins expect it
-CNI_CONF_DIR="/etc/cni/net.d"       # containerd/CNI don't support relocating this cleanly
+PG_CONTAINER="${PG_CONTAINER:-porter-dev-postgres}"
+PG_VOLUME="${PG_VOLUME:-porter-dev-pgdata}"
+PG_PORT="${PG_PORT:-5432}"
+PG_USER="${PG_USER:-porter}"
+PG_PASSWORD="${PG_PASSWORD:-porter}"
+PG_DB="${PG_DB:-porter}"
+DB_URL="postgres://${PG_USER}:${PG_PASSWORD}@localhost:${PG_PORT}/${PG_DB}?sslmode=disable"
+FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-v1.16.1}"
+FIRECRACKER_DIR="${PORTER_FIRECRACKER_DIR:-$BIN_DIR}"
+FIRECRACKER_BIN="${PORTER_FIRECRACKER_BIN:-$FIRECRACKER_DIR/firecracker}"
+BASE_IMAGE_DIR="${PORTER_BASE_IMAGE_DIR:-$STATE_DIR/base-images/default}"
+KERNEL_PATH="${PORTER_KERNEL_PATH:-${PORTER_KERNEL_IMAGE:-$BASE_IMAGE_DIR/vmlinux}}"
+ROOTFS_PATH="${PORTER_ROOTFS_PATH:-${PORTER_ROOTFS_IMAGE:-$BASE_IMAGE_DIR/rootfs.ext4}}"
+BASE_IMAGE_URL="${PORTER_BASE_IMAGE_URL:-}"
+BASE_IMAGE_SHA256="${PORTER_BASE_IMAGE_SHA256:-}"
+GITHUB_REPOSITORY="${PORTER_GITHUB_REPOSITORY:-sudo-su-coffee/porter}"
+RELEASE_TAG="${PORTER_RELEASE_TAG:-v1.0.0-beta-dev}"
+BASE_IMAGE_ASSET="${PORTER_BASE_IMAGE_ASSET:-}"
+SOCKET_DIR="${FIRECRACKER_SOCKET_DIR:-$STATE_DIR/sockets}"
+PORTER_BOOTSTRAP_ADMIN_PASSWORD="${PORTER_BOOTSTRAP_ADMIN_PASSWORD:-}"
+PORTER_SECRET_KEY="${PORTER_SECRET_KEY:-}"
 
-PG_CONTAINER=porter-dev-postgres
-PG_VOLUME=porter-dev-pgdata
-PG_PORT=${PG_PORT:-5432}
-PG_USER=porter
-PG_PASSWORD=${PG_PASSWORD:-porter}
-PG_DB=porter
-DB_URL="postgres://$PG_USER:$PG_PASSWORD@localhost:$PG_PORT/$PG_DB?sslmode=disable"
+mkdir -p "$BIN_DIR" "$FIRECRACKER_DIR" "$BASE_IMAGE_DIR" "$STATE_DIR/images" "$STATE_DIR/custom" "$SOCKET_DIR" "$LOG_DIR" "$CONF_DIR"
 
-POOL_SIZE=${POOL_SIZE:-10G}
-FIRECRACKER_VERSION=${FIRECRACKER_VERSION:-v1.16.1}
-KERNEL_PATH=${KERNEL_PATH:-$STATE_DIR/vmlinux}
-PORTER_API_TOKEN=${PORTER_API_TOKEN:-dev-token-$(openssl rand -hex 8 2>/dev/null || echo insecure)}
+if [ -z "$BASE_IMAGE_URL" ] && [ -n "$BASE_IMAGE_ASSET" ]; then
+  BASE_IMAGE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${BASE_IMAGE_ASSET}"
+fi
+if [ -n "$BASE_IMAGE_URL" ]; then
+  case "$BASE_IMAGE_URL" in
+    https://github.com/*/releases/download/*) ;;
+    *) printf '\033[0;31m    FAIL: base image source must be a GitHub Release URL; AWS and arbitrary mirrors are not supported\033[0m\n' >&2; exit 1 ;;
+  esac
+fi
 
-mkdir -p "$DEV_DIR" "$BIN_DIR" "$STATE_DIR" "$LOG_DIR" "$CONF_DIR"
-
-c()    { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
-ok()   { printf '\033[0;32m    ok: %s\033[0m\n' "$1"; }
-skip() { printf '\033[0;36m    skip (already present): %s\033[0m\n' "$1"; }
+c() { printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
+ok() { printf '\033[0;32m    ok: %s\033[0m\n' "$1"; }
+skip() { printf '\033[0;36m    skip: %s\033[0m\n' "$1"; }
 warn() { printf '\033[0;33m    warn: %s\033[0m\n' "$1"; }
-die()  { printf '\033[0;31m    FAIL: %s\033[0m\n' "$1" >&2; exit 1; }
+die() { printf '\033[0;31m    FAIL: %s\033[0m\n' "$1" >&2; exit 1; }
 
 IS_ROOT=0
 [ "$(id -u)" -eq 0 ] && IS_ROOT=1
 
-IS_WSL=0
-grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
-
-# Running from /mnt/<drive>/... under WSL2 means the repo sits on DrvFs
-# (9p over the Windows filesystem), which has caused AccessDenied /
-# cache-rename failures on Go builds and can behave oddly under dmsetup/
-# loop devices too. Not fatal, just a heads-up.
-if [ "$IS_WSL" -eq 1 ] && [[ "$BACKEND_DIR" == /mnt/* ]]; then
-  warn "repo is on a DrvFs mount ($BACKEND_DIR) — Go build caches and loop/dm"
-  warn "  operations are known to be flaky here. If you hit odd AccessDenied"
-  warn "  or rename failures, move the repo to native ext4, e.g. ~/porter-main,"
-  warn "  and re-clone/copy from there instead of /mnt/d/..."
-fi
-
-# ---------------------------------------------------------------------------
-# 0. KVM / WSL2 check — informational, never fatal, so Postgres+build still work.
-# ---------------------------------------------------------------------------
 check_kvm() {
-  c "0/8  KVM availability"
-  if [ -e /dev/kvm ]; then
-    if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-      ok "/dev/kvm present and accessible as $(whoami)"
-    else
-      warn "/dev/kvm exists but isn't read/write for $(whoami)."
-      warn "  fix: sudo usermod -aG kvm \$USER   (then log out/in, or: newgrp kvm)"
-    fi
+  c "1/7  KVM availability"
+  if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+    ok "/dev/kvm is readable and writable"
+  elif [ -e /dev/kvm ]; then
+    warn "/dev/kvm exists but is not readable/writable for $(whoami)"
   else
-    warn "/dev/kvm not found — microVMs will not boot."
-    if [ "$IS_WSL" -eq 1 ]; then
-      cat <<'EOF'
-    You're in WSL2. To get /dev/kvm:
-      1. On Windows: enable nested virtualization for the WSL2 VM. In an
-         elevated PowerShell:
-           Set-VMProcessor -VMName <WSLDistroVM> -ExposeVirtualizationExtensions $true
-         (or, simpler on Win11 23H2+: nested virt is on by default if your
-         host CPU/BIOS has VT-x/AMD-V + "Virtualization" enabled in BIOS and
-         Hyper-V/Core Isolation isn't blocking it).
-      2. Inside WSL2:
-           sudo modprobe kvm
-           sudo modprobe kvm_intel   # or kvm_amd on AMD hosts
-           ls -l /dev/kvm
-      3. If /dev/kvm still doesn't appear, your WSL2 kernel may need
-         CONFIG_KVM built in — check with: zcat /proc/config.gz | grep CONFIG_KVM
-         (Microsoft's stock WSL2 kernel ships this enabled on recent builds;
-         a custom kernel may not.)
-EOF
-    else
-      warn "  enable virtualization in BIOS, then: sudo modprobe kvm kvm_intel  (or kvm_amd)"
-    fi
+    warn "/dev/kvm is missing; the API can run, but direct microVMs cannot boot"
   fi
 }
 
-# ---------------------------------------------------------------------------
-# 1. PostgreSQL in Docker — idempotent: reuse existing container/volume.
-# ---------------------------------------------------------------------------
 setup_postgres() {
-  c "1/8  PostgreSQL (Docker, dev-local)"
-  command -v docker >/dev/null 2>&1 || die "docker not found — install Docker Desktop (with WSL2 integration) or docker-ce."
-
+  c "2/7  PostgreSQL development database"
+  command -v docker >/dev/null 2>&1 || die "docker is required for the dev database; set up PostgreSQL separately for production"
   if ! docker volume inspect "$PG_VOLUME" >/dev/null 2>&1; then
     docker volume create "$PG_VOLUME" >/dev/null
     ok "created volume $PG_VOLUME"
   else
     skip "volume $PG_VOLUME"
   fi
-
   if docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
-    skip "container $PG_CONTAINER (already running)"
+    skip "container $PG_CONTAINER"
   elif docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
     docker start "$PG_CONTAINER" >/dev/null
-    ok "started existing container $PG_CONTAINER"
+    ok "started container $PG_CONTAINER"
   else
-    docker run -d \
-      --name "$PG_CONTAINER" \
-      -e POSTGRES_USER="$PG_USER" \
-      -e POSTGRES_PASSWORD="$PG_PASSWORD" \
-      -e POSTGRES_DB="$PG_DB" \
-      -p "127.0.0.1:${PG_PORT}:5432" \
-      -v "$PG_VOLUME:/var/lib/postgresql/data" \
-      --restart unless-stopped \
-      postgres:15-alpine >/dev/null
-    ok "created + started container $PG_CONTAINER on 127.0.0.1:$PG_PORT"
+    docker run -d --name "$PG_CONTAINER" \
+      -e POSTGRES_USER="$PG_USER" -e POSTGRES_PASSWORD="$PG_PASSWORD" -e POSTGRES_DB="$PG_DB" \
+      -p "127.0.0.1:${PG_PORT}:5432" -v "$PG_VOLUME:/var/lib/postgresql/data" \
+      --restart unless-stopped postgres:15-alpine >/dev/null
+    ok "created PostgreSQL container on 127.0.0.1:$PG_PORT"
   fi
-
-  printf '    waiting for postgres to accept connections'
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     if docker exec "$PG_CONTAINER" pg_isready -U "$PG_USER" >/dev/null 2>&1; then
-      echo; ok "postgres ready ($DB_URL)"
-      return 0
+      ok "PostgreSQL ready at $DB_URL"
+      return
     fi
-    printf '.'; sleep 1
+    sleep 1
   done
-  echo
-  die "postgres in $PG_CONTAINER did not become ready in 30s — check: docker logs $PG_CONTAINER"
+  die "PostgreSQL did not become ready; inspect: docker logs $PG_CONTAINER"
 }
 
-# ---------------------------------------------------------------------------
-# 2. containerd + devmapper + aws.firecracker shim  (needs root)
-#    BUGFIX vs prod script: reuse existing loop devices instead of creating
-#    duplicates on every run (previously broke `dmsetup create` on re-runs).
-# ---------------------------------------------------------------------------
-setup_containerd() {
-  c "2/8  containerd + devmapper snapshotter + aws.firecracker runtime"
-  if [ "$IS_ROOT" -ne 1 ]; then
-    warn "not running as root — skipping containerd/devmapper/firecracker/CNI setup."
-    warn "  re-run with: sudo bash backend/deploy/dev-install.sh"
-    return 0
-  fi
-
-  command -v containerd >/dev/null 2>&1 || die "containerd not found — apt install containerd"
-  command -v dmsetup    >/dev/null 2>&1 || die "dmsetup not found — apt install thin-provisioning-tools"
-  command -v losetup    >/dev/null 2>&1 || die "losetup not found — apt install util-linux"
-
-  mkdir -p /var/lib/containerd-devmapper "$CNI_BIN_DIR" "$CNI_CONF_DIR"
-
-  if [ ! -f "$STATE_DIR/thin-data" ]; then
-    truncate -s "$POOL_SIZE" "$STATE_DIR/thin-data"
-    truncate -s 512M         "$STATE_DIR/thin-meta"
-    ok "created thin-pool backing files ($POOL_SIZE data / 512M meta) under $STATE_DIR"
+setup_direct_prereqs() {
+  c "3/7  direct Firecracker prerequisites"
+  command -v ip >/dev/null 2>&1 || die "ip is required; install iproute2"
+  mkdir -p "$SOCKET_DIR" "$LOG_DIR" "$STATE_DIR/images" "$STATE_DIR/custom"
+  if [ "$IS_ROOT" -eq 1 ]; then
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || warn "could not enable net.ipv4.ip_forward"
+    ok "TAP/socket/log directories ready under $STATE_DIR"
   else
-    skip "thin-pool backing files ($STATE_DIR/thin-data)"
+    warn "not root; privileged TAP setup will be checked when Porter boots a replica"
   fi
-
-  # BUGFIX: reuse an already-attached loop device for this file instead of
-  # always attaching a fresh one (losetup -j finds it if it exists).
-  LOOP_DATA=$(losetup -j "$STATE_DIR/thin-data" | cut -d: -f1 | head -1)
-  [ -z "$LOOP_DATA" ] && LOOP_DATA=$(losetup --find --show "$STATE_DIR/thin-data")
-  LOOP_META=$(losetup -j "$STATE_DIR/thin-meta" | cut -d: -f1 | head -1)
-  [ -z "$LOOP_META" ] && LOOP_META=$(losetup --find --show "$STATE_DIR/thin-meta")
-  [ -n "$LOOP_DATA" ] && [ -n "$LOOP_META" ] || die "losetup failed to attach thin-pool files — out of loop devices?"
-
-  if dmsetup info porter-pool >/dev/null 2>&1; then
-    skip "dm thin-pool 'porter-pool' (already active)"
-  else
-    dmsetup create porter-pool --table \
-      "0 $(blockdev --getsz "$LOOP_DATA") thin-pool $LOOP_META $LOOP_DATA 128 32768 1 skip_block_zeroing"
-    ok "created dm thin-pool 'porter-pool'"
-  fi
-
-  cat > /etc/containerd/config.toml <<EOF
-version = 2
-root = "/var/lib/containerd"
-state = "/run/containerd"
-[plugins]
-  [plugins."io.containerd.grpc.v1.cri"]
-    disable_snapshot_annotations = true
-  [plugins."io.containerd.snapshotter.v1.devmapper"]
-    root_path = "/var/lib/containerd-devmapper"
-    pool_name = "porter-pool"
-    base_image_size = "8GB"
-    async_remove = true
-  [plugins."io.containerd.runtime.v2.task"]
-    [plugins."io.containerd.runtime.v2.task"."aws.firecracker"]
-      config_path = "$CONF_DIR/firecracker-runtime.json"
-EOF
-  systemctl enable containerd >/dev/null 2>&1 || true
-  ok "wrote /etc/containerd/config.toml (config regenerated every run — cheap, not a reinstall)"
 }
 
-# ---------------------------------------------------------------------------
-# 3. firecracker VMM binary  (needs root for /usr/local/bin, but check first)
-# ---------------------------------------------------------------------------
 setup_firecracker() {
-  c "3/8  firecracker VMM binary"
-  if command -v firecracker >/dev/null 2>&1; then
-    skip "firecracker ($(command -v firecracker))"
-    return 0
+  c "4/7  Firecracker binary"
+  local arch fc_arch helper
+  arch="$(uname -m)"
+  case "$arch" in x86_64) fc_arch=x86_64;; aarch64) fc_arch=aarch64;; *) die "unsupported architecture: $arch";; esac
+  helper="$REPO_DIR/install-firecracker.sh"
+  [ -x "$helper" ] || chmod +x "$helper"
+  if "$helper" "$FIRECRACKER_VERSION" "$fc_arch" "$FIRECRACKER_DIR"; then
+    ok "verified Firecracker $FIRECRACKER_VERSION at $FIRECRACKER_DIR"
+  elif [ "${PORTER_ALLOW_FIRECRACKER_FALLBACK:-0}" = "1" ] && [ "$FIRECRACKER_VERSION" != "v1.16.0" ]; then
+    warn "stable Firecracker $FIRECRACKER_VERSION failed; trying pinned fallback v1.16.0"
+    FIRECRACKER_VERSION=v1.16.0 "$helper" v1.16.0 "$fc_arch" "$FIRECRACKER_DIR" || die "stable and fallback Firecracker downloads failed"
+  else
+    die "Firecracker setup failed; set PORTER_ALLOW_FIRECRACKER_FALLBACK=1 to permit the pinned fallback"
   fi
-  if [ "$IS_ROOT" -ne 1 ]; then
-    warn "firecracker missing and not root — can't install to /usr/local/bin. Skipping."
-    return 0
-  fi
-  ARCH=$(uname -m); case "$ARCH" in x86_64) FA=x86_64;; aarch64) FA=aarch64;; *) die "unsupported arch $ARCH";; esac
-  TMP=$(mktemp -d)
-  FC_URL="https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-${FA}.tgz"
-  echo "    downloading $FC_URL"
-  curl --connect-timeout 15 --max-time 300 --retry 3 -fL --progress-bar -o "$TMP/fc.tgz" "$FC_URL" \
-    || die "download failed (network/DNS/proxy issue, or $FIRECRACKER_VERSION/$FA has no release asset — check $FC_URL in a browser)"
-  tar -xzf "$TMP/fc.tgz" -C "$TMP"
-  # BUGFIX: release assets are named firecracker-vX.Y.Z-ARCH (+ a .debug
-  # symbols sibling with the same prefix), not a bare "firecracker" file.
-  # `find -name firecracker` never matches anything, so $(...) expands to ""
-  # and `install -m 0755 "" /usr/local/bin/firecracker` fails with
-  # "install: cannot stat '': No such file or directory".
-  FC_BIN=$(find "$TMP" -type f -name "firecracker-${FIRECRACKER_VERSION}-${FA}" ! -name "*.debug" | head -1)
-  JAILER_BIN=$(find "$TMP" -type f -name "jailer-${FIRECRACKER_VERSION}-${FA}" ! -name "*.debug" | head -1)
-  [ -n "$FC_BIN" ] || die "firecracker binary not found in downloaded archive — asset layout may have changed, check: tar -tzf $TMP/fc.tgz"
-  install -m 0755 "$FC_BIN" /usr/local/bin/firecracker
-  [ -n "$JAILER_BIN" ] && install -m 0755 "$JAILER_BIN" /usr/local/bin/jailer
-  rm -rf "$TMP"
-  ok "installed firecracker $FIRECRACKER_VERSION"
 }
 
-# ---------------------------------------------------------------------------
-# 4. shim runtime config
-#    BUGFIX vs prod script: "jailer": false for dev — matches the actual
-#    demo-first / no-jailer-for-solo-use approach (GoCloud precedent), and
-#    avoids a hard failure when jailer isn't installed. Flip to true + install
-#    jailer if you specifically want to test the jailed path.
-# ---------------------------------------------------------------------------
-setup_shim_config() {
-  c "4/8  shim runtime config + kernel path"
-  FIRECRACKER_BIN=$(command -v firecracker || echo /usr/local/bin/firecracker)
-  cat > "$CONF_DIR/firecracker-runtime.json" <<EOF
-{
-  "firecracker_binary_path": "$FIRECRACKER_BIN",
-  "kernel_image_path": "$KERNEL_PATH",
-  "kernel_args": "console=ttyS0 noapic reboot=k panic=1 pci=off nomodules rw",
-  "default_vcpu_count": 1,
-  "default_mem_size_mib": 256,
-  "snapshotter": "devmapper",
-  "jailer": false,
-  "cpu_template": "T2",
-  "enable_metadata": false
-}
-EOF
-  ok "wrote $CONF_DIR/firecracker-runtime.json (jailer=false for dev)"
-  if [ -f "$KERNEL_PATH" ]; then
-    ok "kernel present at $KERNEL_PATH"
-  else
-    warn "no kernel at $KERNEL_PATH yet — run: porter kernel set <path|URL> --kernel-dir=$STATE_DIR"
+setup_base_image() {
+  c "5/8  base microVM image"
+  mkdir -p "$BASE_IMAGE_DIR"
+  if [ -f "$KERNEL_PATH" ] && [ -f "$ROOTFS_PATH" ]; then
+    ok "using local base artifacts: $KERNEL_PATH + $ROOTFS_PATH"
+    return
   fi
-  [ "$IS_ROOT" -eq 1 ] && command -v containerd >/dev/null 2>&1 && systemctl restart containerd 2>/dev/null || true
-}
-
-# ---------------------------------------------------------------------------
-# 5. CNI bridge + NAT
-#    BUGFIX vs prod script: bridge gets a real host IP (172.20.0.1/16), not
-#    the bare network address. Also actually fetches tc-redirect-tap instead
-#    of silently depending on it being present.
-# ---------------------------------------------------------------------------
-setup_cni() {
-  c "5/8  CNI bridge + NAT (microVM networking)"
-  if [ "$IS_ROOT" -ne 1 ]; then
-    warn "not root — skipping CNI/bridge/NAT setup."
-    return 0
+  if [ -z "$BASE_IMAGE_URL" ]; then
+    warn "base image is not installed; set PORTER_GITHUB_REPOSITORY, PORTER_RELEASE_TAG, PORTER_BASE_IMAGE_ASSET, and PORTER_BASE_IMAGE_SHA256, then rerun"
+    return
   fi
-
-  if [ -x "$CNI_BIN_DIR/bridge" ] && [ -x "$CNI_BIN_DIR/host-local" ]; then
-    skip "base CNI plugins ($CNI_BIN_DIR)"
-  else
-    ARCH=$(uname -m); case "$ARCH" in x86_64) CA=amd64;; aarch64) CA=arm64;; *) die "unsupported arch";; esac
-    TMP=$(mktemp -d)
-    CNI_URL="https://github.com/containernetworking/plugins/releases/download/v1.4.0/cni-plugins-linux-$CA-v1.4.0.tgz"
-    echo "    downloading $CNI_URL"
-    curl --connect-timeout 15 --max-time 300 --retry 3 -fL --progress-bar -o "$TMP/cni.tgz" "$CNI_URL" \
-      || die "download failed (network/DNS/proxy issue) — check $CNI_URL in a browser"
-    mkdir -p "$CNI_BIN_DIR"
-    tar -xzf "$TMP/cni.tgz" -C "$CNI_BIN_DIR"
-    rm -rf "$TMP"
-    ok "installed base CNI plugins"
-  fi
-
-  # BUGFIX: tc-redirect-tap is NOT in the standard plugins release — it's
-  # firecracker-go-sdk's own binary, and AWS has no official prebuilt release
-  # for it (see awslabs/tc-redirect-tap#6). Previously this ran
-  # `go install .../tc-redirect-tap@latest`, which is out of place here: a
-  # floating version pulled into the shared Go module cache, unlike every
-  # other tool in this script (a plain binary download into a system dir).
-  # Fixed to match that pattern: a curl'd prebuilt binary first, falling
-  # back to an isolated source build that never touches your project's
-  # go.mod or ~/go module cache.
-  if [ -x "$CNI_BIN_DIR/tc-redirect-tap" ]; then
-    skip "tc-redirect-tap"
-  else
-    ARCH=$(uname -m); case "$ARCH" in x86_64) TA="";; aarch64) TA="-arm64";; *) TA="";; esac
-    TCR_RELEASE=2022-04-01-1337
-    TCR_URL="https://github.com/alexellis/tc-tap-redirect-builder/releases/download/${TCR_RELEASE}/tc-redirect-tap${TA}"
-    echo "    downloading prebuilt tc-redirect-tap: $TCR_URL"
-    if curl --connect-timeout 15 --max-time 60 --retry 2 -fL -o "$CNI_BIN_DIR/tc-redirect-tap" "$TCR_URL" 2>/tmp/tc-redirect-tap-build.log; then
-      chmod 0755 "$CNI_BIN_DIR/tc-redirect-tap"
-      ok "installed prebuilt tc-redirect-tap"
-    elif command -v go >/dev/null 2>&1; then
-      warn "prebuilt binary unavailable — falling back to an isolated source build (not touching your go.mod)"
-      TMP=$(mktemp -d)
-      if git clone --depth 1 https://github.com/firecracker-microvm/firecracker-go-sdk.git "$TMP/src" >>/tmp/tc-redirect-tap-build.log 2>&1 \
-        && ( cd "$TMP/src/cni/cmd/tc-redirect-tap" \
-             && GOPATH="$TMP/gopath" GOCACHE="$TMP/gocache" GOFLAGS=-mod=mod \
-                go build -o "$TMP/tc-redirect-tap" . ) >>/tmp/tc-redirect-tap-build.log 2>&1
-      then
-        install -m 0755 "$TMP/tc-redirect-tap" "$CNI_BIN_DIR/tc-redirect-tap"
-        ok "built + installed tc-redirect-tap (isolated build — did not touch $BACKEND_DIR/go.mod or your module cache)"
-      else
-        warn "isolated source build also failed (see /tmp/tc-redirect-tap-build.log) — install manually into $CNI_BIN_DIR"
-      fi
-      rm -rf "$TMP"
-    else
-      warn "prebuilt binary download failed and go not found — install tc-redirect-tap manually into $CNI_BIN_DIR"
-    fi
-  fi
-
-  ip link add porter0 type bridge 2>/dev/null || true
-  # BUGFIX: assign a usable host address inside the subnet, not the network
-  # address itself.
-  ip addr show dev porter0 | grep -q '172.20.0.1/16' || ip addr add 172.20.0.1/16 dev porter0 2>/dev/null || true
-  ip link set porter0 up || true
-
-  INTERNET_IF=$(ip route | awk '/default/ {print $5; exit}')
-  if [ -n "$INTERNET_IF" ]; then
-    iptables -t nat -C POSTROUTING -s 172.20.0.0/16 -o "$INTERNET_IF" -j MASQUERADE 2>/dev/null \
-      || iptables -t nat -A POSTROUTING -s 172.20.0.0/16 -o "$INTERNET_IF" -j MASQUERADE
-  else
-    warn "no default route found — skipping NAT rule (fine if this host has no internet egress requirement)"
-  fi
-  sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
-
-  cat > "$CNI_CONF_DIR/porter.conflist" <<'EOF'
-{ "cniVersion": "0.4.0", "name": "porter", "plugins": [ { "type": "tc-redirect-tap", "bridge": "porter0", "ipam": { "type": "host-local", "subnet": "172.20.0.0/16" } } ] }
-EOF
-  ok "CNI ready — bridge porter0 @ 172.20.0.1/16"
+  [ -n "$BASE_IMAGE_SHA256" ] || die "PORTER_BASE_IMAGE_SHA256 is required for a remote base image bundle"
+  local tmp archive kernel rootfs
+  tmp="$(mktemp -d)"
+  archive="$tmp/base-image"
+  curl --connect-timeout 15 --max-time 900 --retry 3 -fL --progress-bar -o "$archive" "$BASE_IMAGE_URL" \
+    || die "base image download failed: $BASE_IMAGE_URL"
+  printf '%s  %s\n' "$BASE_IMAGE_SHA256" "$archive" | sha256sum -c - || die "base image checksum mismatch"
+  mkdir -p "$tmp/unpacked"
+  case "$BASE_IMAGE_URL" in
+    *.zip|*.zip\?*) command -v unzip >/dev/null 2>&1 || die "unzip is required for a .zip base image bundle"; unzip -q "$archive" -d "$tmp/unpacked" ;;
+    *) tar --extract --file "$archive" --directory "$tmp/unpacked" --no-same-owner --no-same-permissions ;;
+  esac
+  kernel="$(find "$tmp/unpacked" -type f -name vmlinux -print -quit)"
+  rootfs="$(find "$tmp/unpacked" -type f -name rootfs.ext4 -print -quit)"
+  [ -n "$kernel" ] && [ -n "$rootfs" ] || die "base bundle must contain vmlinux and rootfs.ext4"
+  install -m 0644 "$kernel" "$BASE_IMAGE_DIR/vmlinux"
+  install -m 0644 "$rootfs" "$BASE_IMAGE_DIR/rootfs.ext4"
+  KERNEL_PATH="$BASE_IMAGE_DIR/vmlinux"
+  ROOTFS_PATH="$BASE_IMAGE_DIR/rootfs.ext4"
+  ok "installed verified base image at $BASE_IMAGE_DIR"
 }
 
-# ---------------------------------------------------------------------------
-# 6. Build Porter binary — LOCAL only, no /usr/local/bin install.
-# ---------------------------------------------------------------------------
+check_artifacts() {
+  c "6/8  kernel and rootfs artifact readiness"
+  if [ -f "$KERNEL_PATH" ] && [ -s "$KERNEL_PATH" ]; then
+    ok "kernel: $KERNEL_PATH"
+  else
+    warn "missing kernel: $KERNEL_PATH"
+  fi
+  if [ -f "$ROOTFS_PATH" ] && [ -s "$ROOTFS_PATH" ]; then
+    ok "rootfs: $ROOTFS_PATH"
+  else
+    warn "missing rootfs: $ROOTFS_PATH"
+  fi
+  if [ -f "$KERNEL_PATH" ] && [ -f "$ROOTFS_PATH" ]; then
+    sha256sum "$KERNEL_PATH" "$ROOTFS_PATH" > "$BASE_IMAGE_DIR/artifacts.sha256"
+    ok "wrote $BASE_IMAGE_DIR/artifacts.sha256"
+  fi
+  ok "custom bundles: $STATE_DIR/custom"
+}
+
 build_porter() {
-  c "6/8  Build Porter binary (local)"
-  command -v go >/dev/null 2>&1 || die "go not found — install Go 1.25+ (https://go.dev/dl)"
-
-  SRC_HASH=$(find "$BACKEND_DIR" -name '*.go' -newer "$BIN_DIR/porter" 2>/dev/null | head -1)
-  if [ -x "$BIN_DIR/porter" ] && [ -z "$SRC_HASH" ]; then
-    skip "$BIN_DIR/porter (no .go files newer than existing binary)"
-    return 0
-  fi
-
-  ( cd "$BACKEND_DIR" && go build -trimpath \
-      -ldflags "-X main.Version=$(git -C "$BACKEND_DIR" describe --tags --always 2>/dev/null || echo dev-$(date +%Y%m%d))" \
-      -o "$BIN_DIR/porter" ./cmd/porter )
+  c "7/8  build Porter"
+  command -v go >/dev/null 2>&1 || die "Go 1.25+ is required"
+  (cd "$BACKEND_DIR" && go build -trimpath -ldflags "-X main.Version=$(git describe --tags --always 2>/dev/null || echo beta-dev)" -o "$BIN_DIR/porter" ./cmd/porter)
   ok "built $BIN_DIR/porter"
 }
 
-# ---------------------------------------------------------------------------
-# 7. Config
-# ---------------------------------------------------------------------------
 write_config() {
-  c "7/8  Config"
+  c "8/8  write direct-only porter.toml"
+  local fc_bin
+  fc_bin="$FIRECRACKER_BIN"
   cat > "$CONF_DIR/porter.toml" <<EOF
-# generated by dev-install.sh — regenerated on every run, don't hand-edit
+# Generated by deploy/install.sh. Prefer environment variables for secrets.
+[server]
+listen_addr = "127.0.0.1:8080"
+base_domain = "porter.test"
+
 [database]
 url = "$DB_URL"
-
-[server]
-listen = "127.0.0.1:8080"
-api_token = "$PORTER_API_TOKEN"
+auto_migrate = true
 
 [firecracker]
-runtime_config = "$CONF_DIR/firecracker-runtime.json"
-kernel_path = "$KERNEL_PATH"
-state_dir = "$STATE_DIR"
+runtime_mode = "direct"
+base_image_ref = "base://default"
+api_socket_dir = "$SOCKET_DIR"
+kernel_image = "$KERNEL_PATH"
+rootfs_path = "$ROOTFS_PATH"
+firecracker_bin = "$fc_bin"
+logs_dir = "$LOG_DIR"
+images_dir = "$STATE_DIR/images"
+custom_images_dir = "$STATE_DIR/custom"
 
-[logging]
-dir = "$LOG_DIR"
-level = "debug"
+[health]
+enabled = true
+
+[ssh]
+enabled = false
+listen_addr = ":2222"
 EOF
-  ok "wrote $CONF_DIR/porter.toml (api_token=$PORTER_API_TOKEN)"
+  ok "wrote $CONF_DIR/porter.toml"
+  if [ -z "$PORTER_BOOTSTRAP_ADMIN_PASSWORD" ]; then
+    warn "set PORTER_BOOTSTRAP_ADMIN_PASSWORD (12+ chars) for the first database-backed admin login"
+  fi
+  if [ -z "$PORTER_SECRET_KEY" ]; then
+    warn "set PORTER_SECRET_KEY before creating encrypted project secrets"
+  fi
 }
 
-# ---------------------------------------------------------------------------
-# 8. Summary
-# ---------------------------------------------------------------------------
 print_status() {
-  c "8/8  Status"
-  echo "  KVM         : $([ -e /dev/kvm ] && echo OK || echo MISSING)"
-  echo "  docker pg   : $(docker inspect -f '{{.State.Status}}' "$PG_CONTAINER" 2>/dev/null || echo "not created")"
-  echo "  containerd  : $(systemctl is-active containerd 2>/dev/null || echo "n/a (needs root)")"
-  echo "  firecracker : $(command -v firecracker || echo MISSING)"
-  echo "  tc-redirect : $([ -x "$CNI_BIN_DIR/tc-redirect-tap" ] && echo OK || echo MISSING)"
-  echo "  kernel      : $([ -f "$KERNEL_PATH" ] && echo present || echo "MISSING -> $BIN_DIR/porter kernel set")"
-  echo "  binary      : $([ -x "$BIN_DIR/porter" ] && echo "$BIN_DIR/porter" || echo "not built")"
-  echo "  config      : $CONF_DIR/porter.toml"
-  echo "  db url      : $DB_URL"
-  echo
-  echo "Run it:   bash $0 run"
-  echo "Logs:     $LOG_DIR/"
+  c "status"
+  printf '  KVM        : %s\n' "$([ -e /dev/kvm ] && echo present || echo missing)"
+  printf '  Firecracker: %s\n' "$([ -x "$FIRECRACKER_BIN" ] && echo "$FIRECRACKER_BIN" || echo missing)"
+  printf '  kernel     : %s\n' "$([ -f "$KERNEL_PATH" ] && echo present || echo missing)"
+  printf '  rootfs     : %s\n' "$([ -f "$ROOTFS_PATH" ] && echo present || echo missing)"
+  printf '  socket dir : %s\n' "$SOCKET_DIR"
+  printf '  database   : %s\n' "$DB_URL"
+  printf '  config     : %s\n' "$CONF_DIR/porter.toml"
+  printf '\nRun: %s run\n' "$0"
 }
 
 nuke() {
-  read -r -p "This deletes .dev/ (local state, kernel, config) and the Docker postgres volume. Continue? [y/N] " ans
-  [ "$ans" = "y" ] || [ "$ans" = "Y" ] || { echo "aborted"; exit 0; }
-  docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
-  docker volume rm "$PG_VOLUME" >/dev/null 2>&1 || true
-  [ "$IS_ROOT" -eq 1 ] && { dmsetup remove porter-pool 2>/dev/null || true; }
-  rm -rf "$DEV_DIR"
-  ok "nuked dev state. System-level containerd/CNI config left in place — rerun as root to reset those too."
-}
-
-run_porter() {
-  build_porter
-  write_config
-  [ -x "$BIN_DIR/porter" ] || die "binary not built"
-  exec "$BIN_DIR/porter" -config "$CONF_DIR/porter.toml"
-}
-
-main() {
-  case "${1:-install}" in
-    run)    run_porter ;;
-    status) print_status ;;
-    nuke)   nuke ;;
-    install|"")
-      check_kvm
-      setup_postgres
-      setup_containerd
-      setup_firecracker
-      setup_shim_config
-      setup_cni
-      build_porter
-      write_config
-      print_status
-      ;;
-    *) die "unknown command: $1 (use: install | run | status | nuke)" ;;
+  read -r -p "Delete .dev and the dev PostgreSQL volume? [y/N] " answer
+  case "$answer" in y|Y)
+    docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
+    docker volume rm "$PG_VOLUME" >/dev/null 2>&1 || true
+    rm -rf "$DEV_DIR"
+    ok "removed local dev state"
+    ;;
+    *) echo "aborted" ;;
   esac
 }
 
-main "$@"
+case "${1:-install}" in
+  install) check_kvm; setup_postgres; setup_direct_prereqs; setup_firecracker; setup_base_image; check_artifacts; build_porter; write_config; print_status ;;
+  run) build_porter; write_config; exec "$BIN_DIR/porter" -config "$CONF_DIR/porter.toml" ;;
+  status) print_status ;;
+  nuke) nuke ;;
+  *) die "usage: $0 [install|run|status|nuke]" ;;
+esac

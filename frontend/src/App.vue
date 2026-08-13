@@ -1,5 +1,8 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from "vue";
+// Design philosophy: adapt Whatomate's calm operator workspace for Porter—quiet
+// navigation, explicit runtime state, and a responsive shell that keeps the
+// working surface primary.
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { connectionLive, connectEvents, disconnectEvents } from "./api/events";
 import NewProjectModal from "./components/NewProjectModal.vue";
@@ -9,31 +12,31 @@ import { clearToken, getToken } from "./api/client";
 const route = useRoute();
 const router = useRouter();
 const showNewProject = ref(false);
+const isCollapsed = ref(false);
+const isMobileMenuOpen = ref(false);
 const authed = computed(() => route.name !== "login");
-const user = computed(() => getToken() ? "admin" : "");
+const user = computed(() => (getToken() ? "operator" : ""));
 
-const nav = [
-  { section: "Overview" },
-  { name: "Deployments", to: "/", icon: "◧" },
-  { name: "Traffic", to: "/traffic", icon: "⇄" },
-  { name: "Analytics", to: "/analytics", icon: "◫" },
-  { name: "Domains", to: "/domains", icon: "◉" },
-  { section: "Manage" },
-  { name: "Images", to: "/images", icon: "▤" },
-  { name: "Servers", to: "/servers", icon: "⬒" },
-  { name: "Logs", to: "/logs", icon: "≡" },
-  { section: "Access" },
-  { name: "Teams", to: "/teams", icon: "⚑" },
-  { name: "Settings", to: "/settings", icon: "⚙" },
+const navSections = [
+  { label: "Operate", items: [{ name: "Deployments", to: "/", icon: "◧" }, { name: "Replicas", to: "/replicas", icon: "◌" }, { name: "Domains", to: "/domains", icon: "◉" }] },
+  { label: "Observe", items: [{ name: "Traffic", to: "/traffic", icon: "⇄" }, { name: "Analytics", to: "/analytics", icon: "◫" }, { name: "Logs", to: "/logs", icon: "≡" }, { name: "Daemon logs", to: "/daemon-logs", icon: "⌁" }] },
+  { label: "Manage", items: [{ name: "Images", to: "/images", icon: "▤" }, { name: "Servers", to: "/servers", icon: "⬒" }, { name: "Host readiness", to: "/host/prerequisites", icon: "⌂" }] },
+  { label: "Access", items: [{ name: "Teams & RBAC", to: "/teams", icon: "⚑" }, { name: "Roles", to: "/access/roles", icon: "◇" }, { name: "Settings", to: "/settings", icon: "⚙" }] },
 ];
 
 function isActive(to) {
   if (to === "/") return route.path === "/" || route.path.startsWith("/projects") || route.path.startsWith("/vms");
-  return route.path === to;
+  return route.path === to || route.path.startsWith(`${to}/`);
+}
+
+function navigate(to) {
+  isMobileMenuOpen.value = false;
+  router.push(to);
 }
 
 function logout() {
   clearToken();
+  isMobileMenuOpen.value = false;
   router.push({ name: "login" });
 }
 
@@ -42,36 +45,57 @@ onUnmounted(() => disconnectEvents());
 </script>
 
 <template>
-  <div v-if="authed" class="shell">
-    <aside class="sidebar">
-      <div class="side-brand" @click="router.push({ name: 'list' })">
+  <div v-if="authed" class="shell" :class="{ 'shell-collapsed': isCollapsed }">
+    <header class="mobile-topbar">
+      <button class="mobile-brand" type="button" @click="navigate('/')" aria-label="Open Porter overview">
         <span class="brand-mark">▣</span><span>Porter</span>
+      </button>
+      <button class="icon-button" type="button" :aria-expanded="isMobileMenuOpen" aria-label="Toggle navigation" @click="isMobileMenuOpen = !isMobileMenuOpen">
+        {{ isMobileMenuOpen ? "×" : "☰" }}
+      </button>
+    </header>
+
+    <div v-if="isMobileMenuOpen" class="shell-scrim" @click="isMobileMenuOpen = false" />
+
+    <aside class="sidebar" :class="{ 'sidebar-open': isMobileMenuOpen }" aria-label="Porter workspace navigation">
+      <div class="side-brand-row">
+        <button class="side-brand" type="button" @click="navigate('/')">
+          <span class="brand-mark">▣</span><span v-if="!isCollapsed" class="brand-wordmark">Porter</span>
+        </button>
+        <button class="collapse-button" type="button" :aria-label="isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'" @click="isCollapsed = !isCollapsed">
+          {{ isCollapsed ? "›" : "‹" }}
+        </button>
       </div>
-      <nav class="side-nav">
-        <template v-for="(item, i) in nav" :key="i">
-          <div v-if="item.section" class="side-section">{{ item.section }}</div>
-          <router-link v-else class="side-link" :class="{ active: isActive(item.to) }" :to="item.to">
-            <span class="ico">{{ item.icon }}</span><span>{{ item.name }}</span>
+
+      <nav class="side-nav" aria-label="Primary navigation">
+        <section v-for="section in navSections" :key="section.label" class="nav-section">
+          <div v-if="!isCollapsed" class="side-section">{{ section.label }}</div>
+          <div v-else class="side-section-rule" aria-hidden="true" />
+          <router-link v-for="item in section.items" :key="item.to" class="side-link" :class="{ active: isActive(item.to) }" :to="item.to" :aria-current="isActive(item.to) ? 'page' : undefined" @click="isMobileMenuOpen = false">
+            <span class="ico" aria-hidden="true">{{ item.icon }}</span><span v-if="!isCollapsed">{{ item.name }}</span>
           </router-link>
-        </template>
+        </section>
       </nav>
+
       <div class="side-footer">
-        <div class="side-user">
-          <span class="dot"></span><span>{{ user }}</span>
-        </div>
-        <button class="btn btn-primary" style="width: 100%" @click="showNewProject = true">+ New Project</button>
-        <button class="btn" style="width: 100%" @click="logout">Sign out</button>
+        <div class="side-user" :title="user"><span class="dot" aria-hidden="true"></span><span v-if="!isCollapsed">{{ user }}</span></div>
+        <button class="btn btn-primary" :class="{ 'btn-icon-only': isCollapsed }" type="button" @click="showNewProject = true"><span aria-hidden="true">+</span><span v-if="!isCollapsed">New Project</span></button>
+        <button class="btn" :class="{ 'btn-icon-only': isCollapsed }" type="button" @click="logout"><span aria-hidden="true">↪</span><span v-if="!isCollapsed">Sign out</span></button>
       </div>
     </aside>
 
     <div class="content">
-      <main>
-        <router-view />
-      </main>
+      <div class="workspace-bar">
+        <div><span class="workspace-kicker">PORTER / CONTROL PLANE</span><span class="workspace-route">{{ route.name || "workspace" }}</span></div>
+        <div class="workspace-tools">
+          <div class="workspace-status"><span class="conn-dot" :class="connectionLive ? 'live' : 'down'" aria-hidden="true"></span><span>{{ connectionLive ? "Live events" : "Reconnecting" }}</span></div>
+          <button class="workspace-launch" type="button" @click="showNewProject = true"><span aria-hidden="true">+</span> New project</button>
+        </div>
+      </div>
+      <main><router-view /></main>
     </div>
   </div>
   <router-view v-else />
-
-  <NewProjectModal v-if="showNewProject" @close="showNewProject = false" @created="(t) => { showNewProject = false; router.push(t); }" />
+  <NewProjectModal v-if="showNewProject" @close="showNewProject = false" @created="(to) => { showNewProject = false; router.push(to); }" />
   <ToastContainer />
 </template>

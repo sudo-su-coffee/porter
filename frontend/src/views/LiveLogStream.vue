@@ -1,8 +1,8 @@
-<!-- Harbor Glass / Whatomate-inspired Porter workspace: dense operator typography, explicit stream state, no chat-specific UI. -->
+<!-- Porter dashboard: dense operator typography and explicit stream state for live log tailing. -->
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { getToken } from "../api/client";
+import { api, getToken } from "../api/client";
 
 const route = useRoute();
 const router = useRouter();
@@ -10,10 +10,12 @@ const lines = ref([]);
 const status = ref("connecting");
 const error = ref("");
 const connected = ref(false);
+const historyLoading = ref(false);
 let controller;
 
 const title = computed(() => route.meta.streamTitle || "Live logs");
 const endpoint = computed(() => String(route.meta.streamEndpoint || route.path).replace(/:([A-Za-z0-9_]+)/g, (_, key) => encodeURIComponent(route.params[key] || "")));
+const historyEndpoint = computed(() => String(route.meta.historyEndpoint || "").replace(/:([A-Za-z0-9_]+)/g, (_, key) => encodeURIComponent(route.params[key] || "")));
 const backTarget = computed(() => String(route.meta.back || "/").replace(/:([A-Za-z0-9_]+)/g, (_, key) => encodeURIComponent(route.params[key] || "")));
 
 function consumeEvent(block) {
@@ -40,6 +42,18 @@ async function connect() {
   controller = new AbortController();
   error.value = "";
   status.value = "connecting";
+  if (historyEndpoint.value) {
+    historyLoading.value = true;
+    try {
+      const result = await api(historyEndpoint.value);
+      const history = Array.isArray(result) ? result : result?.logs || result?.lines || result?.data || [];
+      if (Array.isArray(history)) lines.value = history;
+    } catch (e) {
+      if (e.status !== 404) error.value = `Historical log load: ${e.message}`;
+    } finally {
+      historyLoading.value = false;
+    }
+  }
   try {
     const res = await fetch(endpoint.value, { headers: { Authorization: `Bearer ${getToken()}` }, signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -80,7 +94,7 @@ onUnmounted(() => controller?.abort());
 <template>
   <a class="back-link" @click="goBack">&larr; Back to workspace</a>
   <header class="page-header">
-    <div><div class="page-title">{{ title }}</div><div class="page-sub mono">{{ endpoint }} · {{ connected ? "connected" : status }}</div></div>
+    <div><div class="page-title">{{ title }}</div><div class="page-sub mono">{{ endpoint }} · {{ connected ? "connected" : status }}<span v-if="historyLoading"> · loading history</span></div></div>
     <div class="detail-actions"><button class="btn btn-sm" @click="connect">Reconnect</button></div>
   </header>
   <div v-if="error" class="error-box">{{ error }}</div>

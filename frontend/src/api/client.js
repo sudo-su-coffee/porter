@@ -104,11 +104,18 @@ export async function api(path, opts = {}) {
 }
 
 export async function login(username, password) {
-  const res = await fetch("/login", {
+  let res = await fetch("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
+  if (res.status === 404) {
+    res = await fetch("/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || "Login failed");
   setToken(body.token);

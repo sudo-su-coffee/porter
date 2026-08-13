@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+if [ "${PORTER_PG_TEST_KEEP:-0}" != 1 ]; then
+  trap 'rm -rf "$WORK"' EXIT
+fi
 BIN="$WORK/bin"
 LOG="$WORK/commands.log"
 mkdir -p "$BIN"
@@ -49,7 +51,11 @@ printf 'createdb %s\n' "$*" >> "${PORTER_PG_TEST_LOG:?}"
 EOF
 cat > "$BIN/psql" <<'EOF'
 #!/usr/bin/env bash
-input="$(cat)"
+input=''
+case "$*" in
+  *c*|*-f*) ;;
+  *) input="$(cat)" ;;
+esac
 printf 'psql %s\n%s\n' "$*" "$input" >> "${PORTER_PG_TEST_LOG:?}"
 case "$*" in
   *"FROM pg_roles"*) exit 1 ;;

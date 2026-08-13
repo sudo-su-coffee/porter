@@ -14,6 +14,10 @@ const vm = ref(null);
 const traffic = ref([]);
 const logs = ref([]);
 const sshInfo = ref(null);
+const sshCertificate = ref(null);
+const consoleInfo = ref(null);
+const execCommand = ref("");
+const execResult = ref(null);
 const health = ref(null);
 const metrics = ref([]);
 const error = ref("");
@@ -40,6 +44,20 @@ async function loadTraffic() {
 }
 async function loadSSH() {
   sshInfo.value = await api(`/vms/${props.id}/ssh-info`);
+}
+async function requestSSHCertificate() {
+  try { sshCertificate.value = await api(`/vms/${props.id}/ssh-cert`, { method: "POST" }); }
+  catch (e) { error.value = e.message; }
+}
+async function inspectConsole() {
+  try { consoleInfo.value = await api(`/vms/${props.id}/console`); }
+  catch (e) { error.value = e.message; }
+}
+async function execReplica() {
+  const command = execCommand.value.trim();
+  if (!command) return;
+  try { execResult.value = await api(`/vms/${props.id}/exec`, { method: "POST", body: JSON.stringify({ cmd: command.split(/\s+/) }) }); }
+  catch (e) { execResult.value = { status: "request error", error: e.message }; }
 }
 async function loadHealth() {
   health.value = await api(`/vms/${props.id}/health`);
@@ -175,6 +193,12 @@ onUnmounted(() => disconnectEvents());
       <div v-if="sshInfo" class="terminal" style="margin-top:12px">
         <div class="tline">ssh -p {{ sshInfo.port }} {{ sshInfo.user }}@{{ sshInfo.host }}</div>
       </div>
+      <div class="detail-actions" style="margin-top:14px"><button class="btn btn-sm" @click="requestSSHCertificate">Request certificate readiness</button><button class="btn btn-sm" @click="inspectConsole">Inspect console capability</button></div>
+      <pre v-if="sshCertificate" class="mono settings-json" style="margin-top:12px">{{ JSON.stringify(sshCertificate, null, 2) }}</pre>
+      <pre v-if="consoleInfo" class="mono settings-json" style="margin-top:12px">{{ JSON.stringify(consoleInfo, null, 2) }}</pre>
+      <div class="field" style="margin-top:14px"><label>Non-interactive exec command</label><div class="filter-bar"><input v-model="execCommand" placeholder="uname -a" /><button class="btn btn-sm" :disabled="!execCommand.trim()" @click="execReplica">Run</button></div></div>
+      <pre v-if="execResult" class="mono settings-json" style="margin-top:12px">{{ JSON.stringify(execResult, null, 2) }}</pre>
+      <p class="hint" style="margin-top:12px">The backend may return an explicit unsupported status until a guest-vsock agent is enabled. This UI does not claim arbitrary SSH or guest execution is ready.</p>
     </div>
   </template>
 </template>

@@ -3763,7 +3763,7 @@ func (a *API) handleHostKernel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeError(w, http.StatusNotFound, "vmlinux not found on host; run `porter kernel set <url>` (see deploy/install.sh)")
+    writeError(w, http.StatusNotFound, "vmlinux not found on host; run `porter kernel set <url>` (see scripts/backend/install.sh)")
 }
 
 // handleHostPrerequisites exposes the same direct-Firecracker readiness checks

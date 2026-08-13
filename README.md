@@ -1,202 +1,89 @@
-<p align="center">
-  <img width="80" height="80" alt="Porter logo" src="/assets/porterlogo.png" />
-</p>
-
 # Porter
 
 > **The self-hosted PaaS for direct Firecracker microVMs.**
 
-Porter is a Go control plane and Vue dashboard for running applications as
-kernel-isolated Firecracker microVM replicas on a Linux host. It provides the
-operator workflow around projects, releases, replicas, domains, logs, traffic,
-images, volumes, host readiness, organizations, and database-backed RBAC.
+Porter is a Go control plane and Vue 3 operator dashboard for running applications as kernel-isolated Firecracker microVM replicas on a Linux host. The repository is organized around two workstreams: **Backend** and **Frontend**.
 
-Porter v1.0.0-beta-dev intentionally uses **official Firecracker over Unix-domain
-HTTP API sockets**. It does not use containerd, firecracker-containerd, a Docker
-daemon, an OCI runtime, or a Docker socket as its VM control path.
+Porter v1.0.0-beta-dev uses the official Firecracker HTTP API over one Unix-domain socket per replica. It does **not** use containerd, firecracker-containerd, a Docker daemon, an OCI runtime, or a Docker socket as its VM control path.
 
-## Status and scope
+## Workstreams
 
-The repository contains a working direct-runtime backend, a Vue 3 dashboard,
-database migrations for seeded RBAC and image artifacts, checksum-pinned
-Firecracker release helpers, and a GitHub Releases-only distribution contract.
-The dashboard has 57 route entries spanning the non-WhatsApp PaaS workspace and
-includes authenticated application, replica, and build log streams.
+| Workstream | Location | Responsibility | Primary guide |
+|---|---|---|---|
+| Backend | `backend/` | Go API, PostgreSQL store, migrations, direct Firecracker runtime, TAP networking, embedded dashboard output | [`docs/backend/README.md`](docs/backend/README.md) |
+| Frontend | `frontend/` | Vue 3 dashboard, router, real API forms, resource workflows, SSE views, responsive workspace | [`docs/frontend/README.md`](docs/frontend/README.md) |
 
-The current Git source-build path is deliberately honest: it clones a source
-repository and accepts a verified `vmlinux` plus `rootfs.ext4` bundle. A
-Dockerfile or Compose file is **not** automatically a Firecracker guest. A
-future BuildKit solve still requires a separate reviewed guest-conversion step
-before its result can be booted.
+The repository also keeps shared automation under `scripts/backend/` and `scripts/frontend/`. The root `Makefile` is the short entrypoint for common build and validation operations.
 
-## Runtime architecture
+## Current beta-dev scope
 
-```text
-Vue dashboard / REST client
-            │ bearer auth + X-CSRF-Token + X-Porter-Org-Id
-            ▼
-       Porter Go API
-            │ PostgreSQL-backed projects, builds, RBAC, images, audit data
-            ▼
-     direct runtime manager
-            │ one process and one Unix socket per replica
-            ▼
-       Firecracker
-            │ vmlinux + rootfs.ext4 + TAP interface
-            ▼
-        guest microVM
-```
+The dashboard exposes **39 canonical PaaS product surfaces**, implemented through **25 genuine Vue view components** and **78 route declarations**. The count is intentionally not 39 files: detail pages, live streams, settings sections, and schema-driven resources use real dedicated or shared implementations rather than one-line wrappers.
 
-The host network boundary uses TAP interfaces, private per-project address
-ranges, deterministic guest MAC/IP allocation, and gateway traffic logging.
-The runtime validates the kernel, rootfs, Firecracker binary, KVM, TAP, and
-socket prerequisites before a replica is considered bootable.
+The dashboard covers projects, deployments, builds, direct source and Compose boundaries, replicas, health, metrics, logs, traffic, images, domains, volumes, networks, hooks, cron, alerts, firewall, settings, analytics, servers, host readiness, organizations, teams, users, roles, permissions, audit/events, and API keys. The API-to-Vue audit is recorded in [`docs/backend/PAGE_API_MATRIX.md`](docs/backend/PAGE_API_MATRIX.md), with the latest gap closure in [`docs/backend/PAGE_API_GAP_AUDIT.md`](docs/backend/PAGE_API_GAP_AUDIT.md).
 
-## Quickstart
+## Runtime truth
 
-Porter requires a Linux host with KVM, PostgreSQL, `ip tuntap` capability, and
-the permissions needed to create TAP devices and Firecracker Unix sockets.
-
-```bash
-# 1. Configure secrets for the database-backed control plane.
-export PORTER_DATABASE_URL='postgres://porter:porter@localhost:5432/porter?sslmode=disable'
-export PORTER_BOOTSTRAP_ADMIN_PASSWORD='replace-with-a-long-unique-password'
-export PORTER_SECRET_KEY='replace-with-at-least-32-random-bytes'
-
-# 2. Install the pinned official Firecracker release and provision the base
-#    guest bundle. The installer prefers local files, then GitHub Releases.
-sudo -E bash deploy/install.sh
-
-# 3. Start Porter after installation.
-sudo systemctl enable --now porter
-
-# 4. Open the dashboard and sign in with the migration-seeded admin account.
-#    The first startup consumes PORTER_BOOTSTRAP_ADMIN_PASSWORD once; it is not
-#    used as an authorization bypass.
-```
-
-The canonical TOML template is `backend/porter.toml.example`. Runtime secrets
-should be injected through the environment or a protected systemd environment
-file, not committed to the repository.
-
-## Firecracker and base-image artifacts
-
-Firecracker stays a host prerequisite. `release/firecracker-versions.json`
-pins the stable and fallback official GitHub releases and their SHA-256
-digests. `install-firecracker.sh` downloads only the configured official
-GitHub asset, verifies it before extraction, and fails closed when the digest
-does not match.
-
-Porter guest artifacts are separate from the Firecracker binary. A real base
-bundle contains:
+The supported boot artifact is a real direct microVM manifest containing:
 
 ```text
 vmlinux       # compatible Linux guest kernel
 rootfs.ext4   # bootable ext4 guest filesystem
 ```
 
-The operator guide is [`FIRECRACKER_ARTIFACTS.md`](FIRECRACKER_ARTIFACTS.md).
-The release builder accepts a local verified bundle and creates separate
-daemon and base-image packages for upload to a Porter GitHub Release. No AWS
-bucket or arbitrary artifact mirror is part of the supported flow.
+Docker or OCI image references are not bootable Firecracker guests. The current Git flow clones a repository and accepts it only when it contains validated `vmlinux` and `rootfs.ext4` artifacts. Dockerfile/Compose-to-guest BuildKit conversion remains a separate reviewed worker and is not represented as complete in the dashboard.
 
-## Authentication and RBAC
+Firecracker binaries are pinned to official GitHub releases and verified by SHA-256. Guest artifacts are separate from the Firecracker binary and are never fetched from AWS or an arbitrary mirror. Read the operational artifact policy in [`docs/backend/FIRECRACKER_ARTIFACTS.md`](docs/backend/FIRECRACKER_ARTIFACTS.md) and the distribution policy in [`docs/backend/GITHUB_ARTIFACTS.md`](docs/backend/GITHUB_ARTIFACTS.md).
 
-Porter uses persisted users, organizations, memberships, roles, permissions,
-role-permission rows, sessions, and scoped API keys. There is no hardcoded admin
-username, TOML API token, or configuration-admin bypass.
+## Quickstart
 
-Migration `0007_rbac` creates the role and permission catalog. Migration
-`0012_seed_rbac_admin` creates the initial admin identity and default
-organization. Migration `0015_seed_super_admin` creates the persisted
-`super_admin` role, grants it every permission, promotes the seeded admin, and
-links the account to its default organization as owner. The bootstrap password
-is initialized once from `PORTER_BOOTSTRAP_ADMIN_PASSWORD`.
-
-The Vue Teams & Access workspace can create custom roles, inspect the permission
-catalog, assign and revoke custom-role permissions, select an organization,
-manage organization members, create users, and create or revoke user-scoped
-API keys. Migration-managed system roles are protected from destructive edits.
-
-## Dashboard coverage
-
-The Vue dashboard in `frontend/` is a Whatomate-inspired workspace adapted for
-Porter, not a WhatsApp application. It includes:
-
-| Area | Examples |
-|---|---|
-| Projects | Projects, deployments, build history, source provenance, environments, settings, and rollout actions |
-| Runtime | Replicas, start/stop/restart/delete, health, metrics, traffic, SSH information, host readiness, and base-image readiness |
-| PaaS resources | Domains, services, networks, hooks, cron jobs, alerts, drains, redirects, firewall, volumes, secrets, and project members |
-| Observability | Project logs, replica logs, build logs, live SSE streams, analytics, events, traffic, and daemon logs |
-| Access | Organizations, groups, users, organization members, roles, permissions, audit data, and API keys |
-
-Read-oriented resource routes use real endpoint data and explicit loading,
-error, and empty states. They do not seed fake projects, builds, reviews,
-traffic, or user records.
-
-## API and stream contracts
-
-The API is registered in `backend/internal/api/api.go` and implemented in
-`backend/internal/api/handlers_impl.go`. Authenticated state-changing requests
-require the CSRF token from `GET /csrf`.
-
-Important stream routes are:
-
-```text
-GET /projects/{projectId}/logs/stream
-GET /vms/{replicaId}/logs/stream
-GET /projects/{projectId}/builds/{buildId}/logs/stream
-```
-
-Build logs are persisted with an optional `build_id` by migration `0014`, so
-historical project-level lines remain valid while live build streams can be
-scoped precisely.
-
-## Source builds and BuildKit boundary
-
-The current direct-only source flow performs Git source retrieval and validates
-real guest artifacts. It does not claim that an OCI image or Dockerfile is
-bootable as a microVM. BuildKit integration is a future subsystem with this
-required boundary:
-
-```text
-GitHub source → BuildKit solve → filesystem/image result
-             → reviewed kernel/rootfs guest conversion
-             → SHA-256 validation → registered golden image
-             → direct Firecracker boot
-```
-
-Until guest conversion is implemented and tested on a privileged host, the
-dashboard reports direct-artifact readiness rather than showing a misleading
-Docker build-to-VM success state.
-
-## Development and validation
+Porter requires a Linux host with Go 1.25+, PostgreSQL, KVM, `iproute2` with TAP capability, and permission to create Firecracker Unix sockets. For a host-independent dashboard build, KVM and TAP are not required, but direct microVM boot will remain unavailable.
 
 ```bash
-cd backend
-go test ./...
-go vet ./...
+# 1. Install frontend dependencies and build the embedded dashboard.
+make frontend
 
-cd ../frontend
-npm ci
-npm run build
+# 2. Run backend checks.
+make test
+
+# 3. Run backend development with Docker-backed PostgreSQL.
+bash scripts/backend/dev.sh up
+
+# 4. Install a host for direct runtime operation.
+sudo -E bash scripts/backend/install.sh
 ```
 
-The dashboard build is copied to `backend/web/dist/` and embedded by the Go
-binary. The release archives and SHA-256 manifest are generated locally by the
-release scripts and are not automatically uploaded or merged into GitHub.
+Set `PORTER_DATABASE_URL`, `PORTER_BOOTSTRAP_ADMIN_PASSWORD`, and a protected `PORTER_SECRET_KEY` as appropriate for the environment. Authorization is database-seeded RBAC only; the bootstrap password initializes the persisted account and is not an authorization bypass.
 
-## Repository map
+## Validation
 
-| Path | Purpose |
-|---|---|
-| `backend/` | Go API, direct Firecracker runtime, PostgreSQL store, migrations, and embedded dashboard |
-| `frontend/` | Vue 3 operator dashboard |
-| `deploy/` | Linux installer, development launcher, and deployment guidance |
-| `release/` | GitHub artifact manifest and release-package builder |
-| `FIRECRACKER_ARTIFACTS.md` | Base-image and Firecracker artifact operations guide |
-| `PLAN.md` | Current beta-dev roadmap and release acceptance criteria |
+```bash
+make validate       # frontend production build and shell syntax checks
+make test           # go test ./...
+cd backend && go vet ./...
+```
+
+The Vue build is emitted to `backend/web/dist/` and embedded by the Go binary. The release package requires a real base image and is built with:
+
+```bash
+PORTER_BASE_IMAGE_DIR=/path/to/base-image \
+  bash scripts/backend/build-release.sh v1.0.0-beta-dev x86_64
+```
+
+The release helper refuses to package a release without non-empty `vmlinux` and `rootfs.ext4` artifacts.
+
+## Documentation map
+
+### Backend
+
+The [Backend documentation index](docs/backend/README.md) links the API reference, runtime boundary, artifact operations, BuildKit limitation, deployment guide, release audit, route/page matrices, and release distribution policy.
+
+### Frontend
+
+The [Frontend documentation index](docs/frontend/README.md) links the dashboard contract, page-flow audit, view architecture, route philosophy, build output, and no-wrapper policy.
+
+### Project decisions
+
+The [beta-dev plan](docs/backend/PLAN.md) records the migration intent and acceptance criteria. Historical audit documents are retained under the relevant workstream instead of being duplicated at the repository root.
 
 ## License
 

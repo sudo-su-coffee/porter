@@ -21,7 +21,7 @@ run: build
 
 # Local dev — one-command dev environment (Docker Postgres + simulate mode).
 dev:
-	bash deploy/dev.sh up
+	bash ../scripts/backend/dev.sh up
 
 test:
 	go test ./...

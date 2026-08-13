@@ -122,12 +122,12 @@ fallbacks.
 
 ## Working documents
 
-* [`README.md`](README.md) is the user-facing implementation guide.
+* [`README.md`](../../README.md) is the user-facing implementation guide.
 * [`FIRECRACKER_ARTIFACTS.md`](FIRECRACKER_ARTIFACTS.md) documents artifact
   storage and offline installation.
-* [`backend/API_COVERAGE_AUDIT.md`](backend/API_COVERAGE_AUDIT.md) records the
+* [`API_COVERAGE_AUDIT.md`](API_COVERAGE_AUDIT.md) records the
   backend route audit.
-* [`frontend/PAGE_FLOW_AUDIT.md`](frontend/PAGE_FLOW_AUDIT.md) records the Vue
+* [`../frontend/PAGE_FLOW_AUDIT.md`](../frontend/PAGE_FLOW_AUDIT.md) records the Vue
   workspace coverage.
 * [`RELEASE_AUDIT_BETA_DEV.md`](RELEASE_AUDIT_BETA_DEV.md) records the current
   end-to-end audit and remaining BuildKit boundary.

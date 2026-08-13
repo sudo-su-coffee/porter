@@ -645,6 +645,12 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /volumes/{volumeId}", a.auth(a.handleDeleteVolume))
 	mux.HandleFunc("POST /volumes/{volumeId}/resize", a.auth(a.handleResizeVolume))
 	mux.HandleFunc("GET /volumes/{volumeId}/usage", a.auth(a.handleVolumeUsage))
+	mux.HandleFunc("GET /projects/{projectId}/volumes", a.auth(a.handleListVolumes))
+	mux.HandleFunc("POST /projects/{projectId}/volumes", a.auth(a.handleCreateVolume))
+	mux.HandleFunc("GET /projects/{projectId}/volumes/{volumeId}", a.auth(a.handleGetVolume))
+	mux.HandleFunc("DELETE /projects/{projectId}/volumes/{volumeId}", a.auth(a.handleDeleteVolume))
+	mux.HandleFunc("POST /projects/{projectId}/volumes/{volumeId}/resize", a.auth(a.handleResizeVolume))
+	mux.HandleFunc("GET /projects/{projectId}/volumes/{volumeId}/usage", a.auth(a.handleVolumeUsage))
 
 	// ========== Images / Registry ==========
 	mux.HandleFunc("GET /images", a.auth(a.handleListImages))
@@ -1013,12 +1019,18 @@ var routePerms = map[string]string{
 	"DELETE /projects/{projectId}/redirects/{redirectId}":                   "redirect.delete",
 	"PUT /projects/{projectId}/redirects/bulk":                              "redirect.create",
 	// volumes are global paths (not under a project)
-	"GET /volumes":                    "volume.read",
-	"POST /volumes":                   "volume.create",
-	"GET /volumes/{volumeId}":         "volume.read",
-	"DELETE /volumes/{volumeId}":      "volume.delete",
-	"POST /volumes/{volumeId}/resize": "volume.resize",
-	"GET /volumes/{volumeId}/usage":   "volume.read",
+	"GET /volumes":                                         "volume.read",
+	"POST /volumes":                                        "volume.create",
+	"GET /volumes/{volumeId}":                              "volume.read",
+	"DELETE /volumes/{volumeId}":                           "volume.delete",
+	"POST /volumes/{volumeId}/resize":                      "volume.resize",
+	"GET /volumes/{volumeId}/usage":                        "volume.read",
+	"GET /projects/{projectId}/volumes":                    "volume.read",
+	"POST /projects/{projectId}/volumes":                   "volume.create",
+	"GET /projects/{projectId}/volumes/{volumeId}":         "volume.read",
+	"DELETE /projects/{projectId}/volumes/{volumeId}":      "volume.delete",
+	"POST /projects/{projectId}/volumes/{volumeId}/resize": "volume.resize",
+	"GET /projects/{projectId}/volumes/{volumeId}/usage":   "volume.read",
 	// global observability / host / vms
 	"GET /global/analytics":                                   "analytics.read",
 	"GET /global/analytics/timeseries":                        "analytics.read",
@@ -1042,7 +1054,9 @@ var routePerms = map[string]string{
 	"GET /images/base":                                        "project.read",
 	"GET /images/base/readiness":                              "project.read",
 	"GET /images/search":                                      "project.read",
+	"GET /images/ml":                                          "project.read",
 	"GET /images/stats":                                       "project.read",
+	"POST /images/custom":                                     "image.upload",
 	"POST /images/prune":                                      "cache.purge",
 	"GET /images/{reference}":                                 "project.read",
 	"DELETE /images/{reference}":                              "project.delete",

@@ -13,7 +13,7 @@
 # The Go binary embeds the built frontend via go:embed web/dist, so the
 # frontend MUST be built first or `make backend` will embed an empty dist.
 
-.PHONY: frontend backend build run dev migrate test clean
+.PHONY: frontend backend build run dev migrate test validate clean
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo v0.1.0-beta-dev)
 
@@ -45,6 +45,9 @@ dev:
 	@echo "  Terminal 2 (frontend UI):  cd frontend && npm run dev"
 	@echo ""
 	@echo "Open http://localhost:5173 (Vite proxies /api -> :8080)"
+
+validate:
+	bash scripts/frontend/validate.sh
 
 # Run pending SQL migrations in backend/migrations with golang-migrate.
 # Uses $$PORTER_DATABASE_URL when set, else the default DSN below.

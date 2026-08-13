@@ -1,14 +1,17 @@
 <script setup>
 import { computed, ref, onMounted } from "vue";
+import { useRoute } from "vue-router";
 import { api, getOrgId, setOrgId } from "../api/client";
 
-const tab = ref("orgs");
+const route = useRoute();
+const tab = ref(route.meta.accessTab || "orgs");
 const error = ref("");
 const orgs = ref([]);
 const groups = ref([]);
 const members = ref([]);
 const users = ref([]);
 const apiKeys = ref([]);
+const events = ref([]);
 
 const newOrg = ref("");
 const newGroup = ref("");
@@ -24,13 +27,13 @@ const newRole = ref({ id: "", name: "", description: "" });
 const activeOrgId = ref(getOrgId());
 const roleChoices = computed(() => roles.value.length ? roles.value : [{ id: "member" }, { id: "admin" }, { id: "owner" }, { id: "super_admin" }]);
 
-const TABS = ["orgs", "groups", "members", "users", "apikeys", "roles"];
+const TABS = ["orgs", "groups", "members", "users", "apikeys", "roles", "events"];
 
 async function load() {
   error.value = "";
   try {
-    const [o, g, m, u, k] = await Promise.allSettled([
-      api("/orgs"), api("/groups"), api("/orgs/members"), api("/users"), api("/users/me/api-keys"),
+    const [o, g, m, u, k, ev] = await Promise.allSettled([
+      api("/orgs"), api("/groups"), api("/orgs/members"), api("/users"), api("/users/me/api-keys"), api("/orgs/events"),
     ]);
 		orgs.value = o.status === "fulfilled" ? o.value || [] : [];
 		if (!activeOrgId.value && orgs.value.length) {
@@ -40,7 +43,8 @@ async function load() {
 		groups.value = g.status === "fulfilled" && g.value ? (g.value.groups || g.value) : [];
     members.value = m.status === "fulfilled" && m.value ? (m.value.members || []) : [];
     users.value = u.status === "fulfilled" ? u.value || [] : [];
-    apiKeys.value = k.status === "fulfilled" ? k.value || [] : [];
+			apiKeys.value = k.status === "fulfilled" ? k.value || [] : [];
+    events.value = ev.status === "fulfilled" && ev.value ? (ev.value.events || ev.value) : [];
   } catch (e) {
     error.value = e.message;
 	}
@@ -312,5 +316,12 @@ onMounted(() => { load(); loadRoles(); });
         <div v-if="!permissions.length" class="hint">No permission catalog returned.</div>
       </div>
     </div>
+  </div>
+
+  <!-- Organization events -->
+  <div v-if="tab === 'events'">
+    <div class="filter-bar"><span class="hint">Persisted organization health and security events.</span><button class="btn btn-sm" @click="load">Refresh</button></div>
+    <div v-if="!events.length" class="empty-state"><strong>No organization events.</strong><span>The backend returned no persisted events for the active organization.</span></div>
+    <div v-else class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Event</th></tr></thead><tbody><tr v-for="(event, index) in events" :key="event.id || index"><td class="num muted">{{ event.ts || event.created_at ? new Date(event.ts || event.created_at).toLocaleString() : '—' }}</td><td class="mono">{{ event.event || event.message || JSON.stringify(event) }}</td></tr></tbody></table></div>
   </div>
 </template>

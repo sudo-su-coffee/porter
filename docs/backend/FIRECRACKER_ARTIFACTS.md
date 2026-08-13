@@ -21,7 +21,7 @@ The **database stores image metadata**, including reference, artifact paths, arc
 
 ## What happens during installation
 
-`deploy/install.sh` builds the Porter binary, creates the state directories, installs a pinned official Firecracker release through `install-firecracker.sh`, writes TOML paths pointing to local files, and checks whether the base image exists. It does **not** download an arbitrary rootfs by default.
+`scripts/backend/install.sh` builds the Porter binary, creates the state directories, installs a pinned official Firecracker release through `scripts/backend/install-firecracker.sh`, writes TOML paths pointing to local files, and checks whether the base image exists. It does **not** download an arbitrary rootfs by default.
 
 To provision a base image, provide a user-owned ZIP or tar archive containing exactly these required files at its root:
 
@@ -34,9 +34,9 @@ Set `PORTER_GITHUB_REPOSITORY`, `PORTER_RELEASE_TAG`, `PORTER_BASE_IMAGE_ASSET`,
 
 ## Stable and fallback Firecracker versions
 
-The repository pins official Firecracker **v1.16.1** as stable and **v1.16.0** as the fallback. Their architecture-specific release URLs and SHA-256 values are recorded in [`release/firecracker-versions.json`](release/firecracker-versions.json). The official release page lists v1.16.1 and provides `firecracker-v1.16.1-x86_64.tgz` and `firecracker-v1.16.1-aarch64.tgz` assets with checksum sidecars.[^1]
+The repository pins official Firecracker **v1.16.1** as stable and **v1.16.0** as the fallback. Their architecture-specific release URLs and SHA-256 values are recorded in [`../../release/firecracker-versions.json`](../../release/firecracker-versions.json). The official release page lists v1.16.1 and provides `firecracker-v1.16.1-x86_64.tgz` and `firecracker-v1.16.1-aarch64.tgz` assets with checksum sidecars.[^1]
 
-`install-firecracker.sh` verifies an existing local binary first, then downloads the pinned archive, verifies the archive before extraction, installs a versioned binary, and creates a local `firecracker` symlink. A fallback version is only selected by the installer when explicitly enabled with `PORTER_ALLOW_FIRECRACKER_FALLBACK=1`; a checksum mismatch is always fatal.
+`scripts/backend/install-firecracker.sh` verifies an existing local binary first, then downloads the pinned archive, verifies the archive before extraction, installs a versioned binary, and creates a local `firecracker` symlink. A fallback version is only selected by the installer when explicitly enabled with `PORTER_ALLOW_FIRECRACKER_FALLBACK=1`; a checksum mismatch is always fatal.
 
 ## Release and upgrade policy
 
@@ -44,7 +44,7 @@ Porter’s compiled Go binary can be copied independently of the artifact direct
 
 For offline installation, pre-populate the state directory and set `PORTER_FIRECRACKER_DIR`, `PORTER_KERNEL_PATH`, and `PORTER_ROOTFS_PATH` to the staged files. The installer validates local artifacts before attempting any remote download. If a remote base bundle is required, it must be an asset in the configured Porter GitHub Release and must have an explicit SHA-256 digest. No AWS bucket or arbitrary mirror is part of the release path.
 
-`release/build-release.sh` builds two GitHub Release assets when a real base image is supplied: `porter-<tag>-<arch>.tar.gz`, containing the compiled Go daemon, installer helpers, release metadata, and a copy of the verified base image; and `porter-base-image-<tag>-<arch>.tar.gz`, containing only `vmlinux` and `rootfs.ext4` for hosts that already have the daemon. The script refuses to create either release package without non-empty guest artifacts.
+`scripts/backend/build-release.sh` builds two GitHub Release assets when a real base image is supplied: `porter-<tag>-<arch>.tar.gz`, containing the compiled Go daemon, installer helpers, release metadata, and a copy of the verified base image; and `porter-base-image-<tag>-<arch>.tar.gz`, containing only `vmlinux` and `rootfs.ext4` for hosts that already have the daemon. The script refuses to create either release package without non-empty guest artifacts.
 
 ## Important boundary
 

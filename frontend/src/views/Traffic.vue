@@ -6,6 +6,7 @@ const traffic = ref([]);
 const error = ref("");
 const filter = ref("all");
 const loading = ref(true);
+const query = ref("");
 
 const filtered = computed(() => {
   if (filter.value === "all") return traffic.value;
@@ -18,8 +19,9 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const t = await api("/traffic");
-    traffic.value = Array.isArray(t) ? t : [];
+    const endpoint = query.value.trim() ? `/traffic/search?q=${encodeURIComponent(query.value.trim())}` : "/traffic";
+    const t = await api(endpoint);
+    traffic.value = Array.isArray(t) ? t : t?.results || [];
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -48,6 +50,8 @@ onMounted(load);
   <div v-if="error" class="error-box">{{ error }}</div>
 
   <div class="filter-bar">
+    <input v-model="query" placeholder="Search path, host, or method…" @keyup.enter="load" />
+    <button class="btn btn-sm" @click="load">Search</button>
     <div class="seg">
       <button :class="{ active: filter === 'all' }" @click="filter = 'all'">All</button>
       <button :class="{ active: filter === 'success' }" @click="filter = 'success'">2xx–3xx</button>

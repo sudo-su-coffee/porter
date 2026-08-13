@@ -194,3 +194,6 @@
 - [ ] Provide the user a fresh `install.sh` command and explain that the old cached release must be replaced by a rebuilt release asset.
 - [ ] Commit the current consolidated installer and backend fixes to ci/release-workflow.
 - [ ] Open a review-only PR against main and run the committed branch tests.
+- [ ] Make the public install.sh work when stdin is a curl pipe under `set -u` without assuming BASH_SOURCE exists.
+- [ ] Allow the new bootstrap to delegate to both new and legacy cached release packages, or fail with a clear refresh message.
+- [ ] Test the exact `curl -fsSL .../install.sh | sudo bash` path against a controlled cached package and verify the fresh release package contents.

@@ -59,6 +59,19 @@ bash "$INSTALLER" x86_64
 [ ! -e "$CALLS" ]
 
 rm -f "$MARKER"
+cat "$INSTALLER" | sudo env \
+  PATH="$FAKE_BIN:$PATH" \
+  PORTER_CACHE_DIR="$CACHE" \
+  PORTER_RELEASE_PACKAGE_SHA256="$EXPECTED" \
+  PORTER_POSTGRES_MODE=local \
+  PORTER_TEST_MARKER="$MARKER" \
+  PORTER_TEST_CURL_CALLS="$CALLS" \
+  bash -s x86_64
+[ -f "$MARKER" ]
+[ "$(cat "$MARKER.mode")" = local ]
+[ ! -e "$CALLS" ]
+
+rm -f "$MARKER"
 printf corrupt > "$CACHE/$PACKAGE"
 sudo env \
   PATH="$FAKE_BIN:$PATH" \

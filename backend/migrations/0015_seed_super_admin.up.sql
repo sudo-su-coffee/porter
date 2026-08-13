@@ -16,5 +16,5 @@ INSERT INTO org_members (org_id, user_id, role)
 SELECT o.id, u.id, 'owner'
 FROM orgs o
 JOIN users u ON u.username = 'admin'
-WHERE o.owner_id = u.id AND o.is_default = true
+WHERE o.owner_id = u.username AND o.is_default = true
 ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role;

@@ -37,10 +37,10 @@ fi
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/base-images/default" "$DIST_DIR/release"
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go -C "$BACKEND_DIR" build -trimpath -ldflags "-s -w -X main.Version=$RELEASE_TAG" -o "$DIST_DIR/porter" ./cmd/porter
+install -m 0755 "$REPO_DIR/scripts/backend/install.sh" "$DIST_DIR/install.sh"
 install -m 0755 "$REPO_DIR/scripts/backend/install-porter.sh" "$DIST_DIR/install-porter.sh"
 install -m 0755 "$REPO_DIR/scripts/backend/install-firecracker.sh" "$DIST_DIR/install-firecracker.sh"
 install -m 0755 "$REPO_DIR/scripts/backend/postgres.sh" "$DIST_DIR/postgres.sh"
-install -m 0755 "$REPO_DIR/scripts/backend/install-linux.sh" "$DIST_DIR/install-linux.sh"
 install -m 0644 "$REPO_DIR/release/porter.service" "$DIST_DIR/porter.service"
 install -m 0644 "$REPO_DIR/release/porter.env.example" "$DIST_DIR/porter.env.example"
 install -m 0644 "$REPO_DIR/docs/backend/FIRECRACKER_ARTIFACTS.md" "$DIST_DIR/FIRECRACKER_ARTIFACTS.md"
@@ -71,9 +71,9 @@ cat > "$DIST_DIR/release/porter-release-manifest.json" <<EOF
   "firecracker": {"manifest": "release/firecracker-versions.json"}
 }
 EOF
-(cd "$DIST_DIR" && sha256sum porter base-images/default/vmlinux base-images/default/rootfs.ext4 release/porter-release-manifest.json > release/SHA256SUMS)
+(cd "$DIST_DIR" && sha256sum porter install.sh base-images/default/vmlinux base-images/default/rootfs.ext4 release/porter-release-manifest.json > release/SHA256SUMS)
 tar -C "$DIST_DIR" -czf "$DIST_DIR/../$BASE_PACKAGE" base-images/default/vmlinux base-images/default/rootfs.ext4
-tar -C "$DIST_DIR" -czf "$DIST_DIR/../$PACKAGE" porter install-porter.sh install-firecracker.sh postgres.sh install-linux.sh porter.service porter.env.example FIRECRACKER_ARTIFACTS.md base-images release
+tar -C "$DIST_DIR" -czf "$DIST_DIR/../$PACKAGE" porter install.sh install-porter.sh install-firecracker.sh postgres.sh porter.service porter.env.example FIRECRACKER_ARTIFACTS.md base-images release
 PACKAGE_SHA256="$(sha256sum "$DIST_DIR/../$PACKAGE" | awk '{print $1}')"
 BASE_PACKAGE_SHA256="$(sha256sum "$DIST_DIR/../$BASE_PACKAGE" | awk '{print $1}')"
 printf '%s  %s\n' "$PACKAGE_SHA256" "$PACKAGE" > "$DIST_DIR/../$PACKAGE.sha256"

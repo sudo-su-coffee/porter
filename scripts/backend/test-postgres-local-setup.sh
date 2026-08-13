@@ -49,7 +49,8 @@ printf 'createdb %s\n' "$*" >> "${PORTER_PG_TEST_LOG:?}"
 EOF
 cat > "$BIN/psql" <<'EOF'
 #!/usr/bin/env bash
-printf 'psql %s\n' "$*" >> "${PORTER_PG_TEST_LOG:?}"
+input="$(cat)"
+printf 'psql %s\n%s\n' "$*" "$input" >> "${PORTER_PG_TEST_LOG:?}"
 case "$*" in
   *"FROM pg_roles"*) exit 1 ;;
   *"FROM pg_database"*) exit 1 ;;

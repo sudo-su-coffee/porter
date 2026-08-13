@@ -164,3 +164,33 @@
 - [x] Create and use one dedicated `porter` application role and `porter` database; do not grant the app superuser privileges.
 - [x] Make local setup idempotent and safe to rerun without replacing the Porter password unexpectedly.
 - [x] Validate the automatic local install path with shell tests and update the release PR.
+
+## Single-installer consolidation and backend audit
+
+- [ ] Confirm the canonical public installer entrypoint and remove or demote duplicate user-facing install paths.
+- [ ] Inspect open PRs and verify the candidate branch contains all installer, PostgreSQL, cache, and documentation fixes.
+- [ ] Audit backend release packaging, embedded dashboard, migrations, direct Firecracker runtime, and systemd installer boundaries for related blockers.
+- [ ] Run backend tests/vet, frontend build, shell tests, package/archive checks, and route/RBAC validation.
+- [ ] Merge the validated installer PR into `main` only after all checks pass, then verify the merged main branch and release workflow inputs.
+- [ ] Run every installer and validation script syntax check from the consolidated branch.
+- [ ] Check for a usable local PostgreSQL service and run a controlled backend database smoke path when available.
+- [ ] Start the Go backend and Vue preview in the sandbox and exercise reachable health, login, and dashboard requests.
+- [ ] Record sandbox limitations for KVM, TAP, systemd, and real Firecracker microVM boot.
+
+## Two-script installer surface
+
+- [ ] Define one production installer entrypoint and keep `dev.sh` as the only development entrypoint.
+- [ ] Route source-checkout and GitHub-release production installation through the production entrypoint without duplicate user-facing commands.
+- [ ] Keep helper implementation files internal to the production flow and exclude them from the public script list/documentation.
+- [ ] Update release packaging, README, deployment docs, and tests for the two-script model.
+- [ ] Validate the two-script flow and publish the consolidated changes without automatically merging unrelated work.
+- [ ] Remove the obsolete install-from-github.sh user path and ensure main documents only install.sh and dev.sh.
+- [ ] Ensure the release package embeds the corrected stdin-based PostgreSQL role SQL and install.sh.
+- [ ] Add release checksum refresh behavior so an updated package under the same tag replaces stale cached archives.
+- [ ] Verify the final retry command does not use the old raw URL or stale cached archive.
+- [ ] Confirm the corrected PostgreSQL helper and API fixes are present in the working tree before commit.
+- [ ] Run the real PostgreSQL migration, backend login/session/API-key, Vue, Go, shell, and release archive tests.
+- [ ] Commit the consolidated changes and open a review-only PR against main.
+- [ ] Provide the user a fresh `install.sh` command and explain that the old cached release must be replaced by a rebuilt release asset.
+- [ ] Commit the current consolidated installer and backend fixes to ci/release-workflow.
+- [ ] Open a review-only PR against main and run the committed branch tests.

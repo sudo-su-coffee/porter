@@ -349,9 +349,18 @@ func runServer(args []string) int {
 	} else {
 		log.Printf("Porter %s — Control API listening on %s", Version, cfg.ListenAddr)
 	}
-	log.Printf("Dashboard: http://localhost%s", cfg.ListenAddr)
+	dashboardURL := cfg.ListenAddr
+	if strings.HasPrefix(dashboardURL, ":") {
+		dashboardURL = "127.0.0.1" + dashboardURL
+	} else if strings.HasPrefix(dashboardURL, "0.0.0.0:") {
+		dashboardURL = "127.0.0.1:" + strings.TrimPrefix(dashboardURL, "0.0.0.0:")
+	}
+	if !strings.HasPrefix(dashboardURL, "http://") && !strings.HasPrefix(dashboardURL, "https://") {
+		dashboardURL = "http://" + dashboardURL
+	}
+	log.Printf("Dashboard: %s", dashboardURL)
 	log.Printf("Database: %s  Config: %s", cfg.DatabaseURL, configPath)
-	st.AppendDaemonLog(fmt.Sprintf("=== Porter %s started  pid=%d  http://localhost%s ===", Version, os.Getpid(), cfg.ListenAddr))
+	st.AppendDaemonLog(fmt.Sprintf("=== Porter %s started  pid=%d  %s ===", Version, os.Getpid(), dashboardURL))
 	log.Printf("runtime: direct Firecracker over per-VM Unix sockets in %s", cfg.FirecrackerSocketDir)
 
 	shutdown := make(chan os.Signal, 1)

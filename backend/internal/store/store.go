@@ -883,6 +883,18 @@ func (s *Store) DeleteSecret(id string) error {
 // --- Golden images (direct Firecracker rootfs + kernel manifests) ---
 
 func (s *Store) PutGoldenImage(gi *types.GoldenImage) error {
+	ports := gi.Ports
+	if ports == nil {
+		ports = []types.Port{}
+	}
+	env := gi.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+	tags := gi.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	kind := gi.Kind
 	if kind == "" {
 		kind = "custom"
@@ -895,6 +907,12 @@ func (s *Store) PutGoldenImage(gi *types.GoldenImage) error {
 	if status == "" {
 		status = "unknown"
 	}
+	version := gi.Version
+	if version == "" {
+		version = "v1"
+	}
+	data := *gi
+	data.Ports, data.Env, data.Tags, data.Version = ports, env, tags, version
 	_, err := s.pool.Exec(context.Background(), `
 		INSERT INTO golden_images (id, name, image, description, vcpus, mem_mib, ports, env, tags, logo, version, kind, architecture, rootfs_path, kernel_path, rootfs_sha256, kernel_sha256, status, validated_at, data, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20, now())
@@ -904,11 +922,11 @@ func (s *Store) PutGoldenImage(gi *types.GoldenImage) error {
 			kind=EXCLUDED.kind, architecture=EXCLUDED.architecture, rootfs_path=EXCLUDED.rootfs_path,
 			kernel_path=EXCLUDED.kernel_path, rootfs_sha256=EXCLUDED.rootfs_sha256,
 			kernel_sha256=EXCLUDED.kernel_sha256, status=EXCLUDED.status,
-			validated_at=EXCLUDED.validated_at, data=EXCLUDED.data`,
+				validated_at=EXCLUDED.validated_at, data=EXCLUDED.data`,
 		gi.ID, gi.Name, gi.Image, gi.Description, gi.VCPUs, gi.MemMiB,
-		string(mustJSON(gi.Ports)), string(mustJSON(gi.Env)), gi.Tags, gi.Logo, gi.Version,
+		string(mustJSON(ports)), string(mustJSON(env)), tags, gi.Logo, version,
 		kind, arch, gi.Rootfs, gi.Kernel, gi.RootfsSHA256, gi.KernelSHA256, status, gi.ValidatedAt,
-		string(mustJSON(gi)))
+		string(mustJSON(&data)))
 	return err
 }
 
@@ -1076,6 +1094,17 @@ func (s *Store) GetUserByUsername(username string) (*types.User, bool) {
 	if err := s.pool.QueryRow(context.Background(),
 		`SELECT id, username, role, COALESCE(email,''), COALESCE(notify_opt_in,false), password_hash, salt
 		 FROM users WHERE username = $1`, username).
+		Scan(&u.ID, &u.Username, &u.Role, &u.Email, &u.NotifyOptIn, &u.PasswordHash, &u.Salt); err != nil {
+		return nil, false
+	}
+	return &u, true
+}
+
+func (s *Store) GetUserByID(id string) (*types.User, bool) {
+	var u types.User
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT id, username, role, COALESCE(email,''), COALESCE(notify_opt_in,false), password_hash, salt
+		 FROM users WHERE id = $1`, id).
 		Scan(&u.ID, &u.Username, &u.Role, &u.Email, &u.NotifyOptIn, &u.PasswordHash, &u.Salt); err != nil {
 		return nil, false
 	}
@@ -1567,7 +1596,7 @@ func (s *Store) GetAPIKeyByHash(hash string) (*types.APIKey, bool) {
 	var k types.APIKey
 	var lu *time.Time
 	err := s.pool.QueryRow(context.Background(),
-		`SELECT id, COALESCE(user_id,''), name, token_hash, created_at, last_used_at FROM api_keys WHERE token_hash = $1`, hash).
+		`SELECT id, user_id::text, name, token_hash, created_at, last_used_at FROM api_keys WHERE token_hash = $1`, hash).
 		Scan(&k.ID, &k.UserID, &k.Name, &k.TokenHash, &k.CreatedAt, &lu)
 	if err != nil {
 		return nil, false
@@ -1583,7 +1612,7 @@ func (s *Store) GetUserByToken(raw string) (*types.User, bool) {
 	if !ok || k.UserID == "" || k.UserID == "*" {
 		return nil, false
 	}
-	u, ok := s.GetUserByUsername(k.UserID)
+	u, ok := s.GetUserByID(k.UserID)
 	if !ok {
 		return nil, false
 	}
@@ -1785,7 +1814,7 @@ func (s *Store) PutCron(c *types.Cron) {
 
 func (s *Store) ListCrons(projectID string) []*types.Cron {
 	rows, err := s.pool.Query(context.Background(),
-		`SELECT id, COALESCE(project_id,''), name, schedule, job_image, active, last_run_at FROM crons
+		`SELECT id, project_id::text, name, schedule, job_image, active, last_run_at FROM crons
 		 WHERE project_id = $1 ORDER BY created_at`, nullStr(projectID))
 	if err != nil {
 		log.Printf("store: list crons: %v", err)
@@ -1809,7 +1838,7 @@ func (s *Store) ListCrons(projectID string) []*types.Cron {
 // by the scheduler to fire jobs across all projects.
 func (s *Store) ListAllCrons() []*types.Cron {
 	rows, err := s.pool.Query(context.Background(),
-		`SELECT id, COALESCE(project_id,''), name, schedule, job_image, active, last_run_at FROM crons ORDER BY created_at`)
+		`SELECT id, project_id::text, name, schedule, job_image, active, last_run_at FROM crons ORDER BY created_at`)
 	if err != nil {
 		log.Printf("store: list all crons: %v", err)
 		return nil
@@ -1832,7 +1861,7 @@ func (s *Store) GetCron(id string) (*types.Cron, bool) {
 	var c types.Cron
 	var lr *time.Time
 	err := s.pool.QueryRow(context.Background(),
-		`SELECT id, COALESCE(project_id,''), name, schedule, job_image, active, last_run_at FROM crons WHERE id = $1`, id).
+		`SELECT id, project_id::text, name, schedule, job_image, active, last_run_at FROM crons WHERE id = $1`, id).
 		Scan(&c.ID, &c.ProjectID, &c.Name, &c.Schedule, &c.JobImage, &c.Active, &lr)
 	if err != nil {
 		return nil, false

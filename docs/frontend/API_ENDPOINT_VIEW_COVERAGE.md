@@ -1,6 +1,6 @@
 # API endpoint to Vue source coverage report
 
-Generated from backend/internal/api/api.go and frontend/src on 2026-08-13T12:02:47.962Z.
+Generated from backend/internal/api/api.go and frontend/src on 2026-08-13T13:29:05.120Z.
 
 | Measure | Count |
 |---|---:|

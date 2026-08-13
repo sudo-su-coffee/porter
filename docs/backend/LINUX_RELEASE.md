@@ -6,15 +6,21 @@ Porter’s Linux beta is a single Go daemon that serves the Vue dashboard from e
 
 Database migration `0012_seed_rbac_admin` creates the username `admin` with an empty password hash. Migration `0015_seed_super_admin` promotes that persisted identity to the `super_admin` role and gives it owner membership in the default organization. On first daemon startup, `PORTER_BOOTSTRAP_ADMIN_PASSWORD` initializes the empty hash exactly once. Existing password hashes are never overwritten.
 
-There is intentionally **no fixed default password**. `install-linux.sh` or `install-porter.sh` generates a random bootstrap password if one was not supplied, writes it to `/var/porter/porter.env`, and prints it once. The editable non-secret runtime configuration is `/var/porter/porter.toml`. The environment file is owned by `root:porter` with mode `0640`, and the user should rotate the password after the first login. For an operator-controlled password, export `PORTER_BOOTSTRAP_ADMIN_PASSWORD` before installation.
+There is intentionally **no fixed default password**. The public `install.sh`
+flow generates a random bootstrap password if one was not supplied, writes it to
+`/var/porter/porter.env`, and prints it once. The editable non-secret runtime
+configuration is `/var/porter/porter.toml`. The environment file is owned by
+`root:porter` with mode `0640`, and the user should rotate the password after
+the first login. For an operator-controlled password, export
+`PORTER_BOOTSTRAP_ADMIN_PASSWORD` before installation.
 
 ## One-command installation
 
 After the release package and its checksum sidecar are published, a Linux user
-can install without cloning the repository:
+can install without cloning the repository through the single production entrypoint:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh | sudo bash
 ```
 
 The bootstrap pauses at the terminal and asks for the PostgreSQL mode. Enter
@@ -27,11 +33,11 @@ To skip the prompt, pass the variables on the privileged command itself:
 
 ```bash
 # Local PostgreSQL on this host.
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh \
   | sudo PORTER_POSTGRES_MODE=local bash
 
 # Remote PostgreSQL.
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh \
   | sudo PORTER_POSTGRES_MODE=remote \
        PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
 ```
@@ -50,7 +56,7 @@ and database startup from KVM/TAP and real guest-artifact readiness.
 
 ```bash
 sudo PORTER_BASE_IMAGE_DIR=/var/porter/base-images/default \
-  bash scripts/backend/install-linux.sh
+  bash scripts/backend/install.sh
 ```
 
 The installer performs the following deterministic steps. It builds the Vue dashboard, embeds it into the Go binary, creates the `porter` service account and writable state directories, verifies the official Firecracker release by pinned SHA-256, installs the systemd unit, writes environment/configuration files, and starts the daemon. It refuses to run as a complete microVM installation until real non-empty `vmlinux` and `rootfs.ext4` files are available.
@@ -93,7 +99,7 @@ PORTER_BASE_IMAGE_DIR=/path/to/real/base-image \
   bash scripts/backend/build-release.sh v1.0.0-beta x86_64
 ```
 
-The directory supplied through `PORTER_BASE_IMAGE_DIR` must contain the actual guest kernel and ext4 root filesystem. Firecracker’s own GitHub release contains the hypervisor binary, not a universal Porter guest rootfs. The builder produces a daemon archive, a separate base-image archive, a manifest, and SHA-256 sums. The base-image archive must be uploaded alongside the daemon archive to the GitHub Release before using `install-porter.sh`.
+The directory supplied through `PORTER_BASE_IMAGE_DIR` must contain the actual guest kernel and ext4 root filesystem. Firecracker’s own GitHub release contains the hypervisor binary, not a universal Porter guest rootfs. The builder produces a daemon archive, a separate base-image archive, a manifest, and SHA-256 sums. The base-image archive must be uploaded alongside the daemon archive to the GitHub Release before using the public `install.sh` bootstrap.
 
 ## Validation boundary
 

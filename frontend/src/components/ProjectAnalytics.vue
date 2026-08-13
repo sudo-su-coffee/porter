@@ -36,16 +36,15 @@ const codeRows = computed(() => {
 
 async function load() {
   error.value = "";
-  const base = `/projects/${props.projectId}/analytics`;
-  try {
+    try {
     const [u, ts, p, c, b, r, i, v, vs, lcp, cls, fid] = await Promise.allSettled([
-      api(`${base}/usage`),
-      api(`${base}/usage/timeseries`),
-      api(`${base}/paths`),
-      api(`${base}/status-codes`),
-      api(`${base}/bandwidth`),
-      api(`${base}/requests`),
-      api(`${base}/invocations`),
+      api(`/projects/${props.projectId}/analytics/usage`),
+      api(`/projects/${props.projectId}/analytics/usage/timeseries`),
+      api(`/projects/${props.projectId}/analytics/paths`),
+      api(`/projects/${props.projectId}/analytics/status-codes`),
+      api(`/projects/${props.projectId}/analytics/bandwidth`),
+      api(`/projects/${props.projectId}/analytics/requests`),
+      api(`/projects/${props.projectId}/analytics/invocations`),
       api(`/projects/${props.projectId}/observability/web-vitals`),
       api(`/projects/${props.projectId}/observability/web-vitals/timeseries`),
       api(`/projects/${props.projectId}/observability/lcp`),

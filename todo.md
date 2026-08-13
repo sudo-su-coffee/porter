@@ -30,3 +30,20 @@
 - [ ] Run privileged KVM/TAP Firecracker smoke tests on an operator host.
 - [ ] Run live PostgreSQL migration validation on an operator host.
 - [ ] Review and implement any separate BuildKit Dockerfile/Compose-to-guest conversion worker before claiming that capability.
+
+## Fresh v1.0.0-beta readiness audit
+
+- [x] Reconcile the final stacked branch and all open PR heads with the local checkout.
+- [x] Generate a method-aware report for all 311 `api.go` registrations and match each to a literal Vue caller, route schema action, tab, stream, or documented exception.
+- [x] Verify dynamic parameter substitution and request payloads for every state-changing endpoint, including legacy aliases and compatibility routes.
+- [x] Verify every declared frontend route is reachable from the dashboard shell, project workspace, account/access flow, or an intentional detail/action control.
+- [x] Re-run backend tests/vet, Vue build, wrapper/chat scans, shell checks, route/RBAC scans, and release ZIP integrity checks.
+- [x] Update the MVP readiness conclusion based on the fresh report; no product endpoint remains unmapped by the source audit.
+
+## One-PR consolidation pass
+
+- [x] Repair the method-aware audit script and generate its endpoint-to-source report.
+- [x] Review every unmatched product route and fix any missing Vue caller, method, payload, or navigation path.
+- [ ] Create one clean consolidated branch from `feat/direct-firecracker-beta-dev` containing the complete validated stack.
+- [ ] Open one final PR against `feat/direct-firecracker-beta-dev` with a thorough merge checklist and no automatic merge.
+- [x] Rerun all backend, frontend, route, RBAC, source-structure, shell, and ZIP integrity checks on the consolidated branch.

@@ -145,8 +145,12 @@ release without those real artifacts.
 
 PostgreSQL stores Porter’s control-plane state. The Linux installer asks whether
 to use PostgreSQL on the same host or a remote operator-managed PostgreSQL
-service; for local mode it can install Debian/Ubuntu PostgreSQL packages after
-confirmation, while remote mode verifies the URL with `psql`. It does not use
+service; local mode automatically configures the official PostgreSQL PGDG APT
+repository and installs the current stable upstream server/client packages
+with `--no-install-recommends`, while remote mode verifies the URL with `psql`. The
+local setup creates only the dedicated `porter` application role and `porter`
+database and gives that role no superuser, database-creation, or role-creation
+privileges. It does not use
 Docker for the Linux installation and does not place the database in a
 Firecracker guest. `/var/porter` contains the editable TOML, protected
 environment file, image/artifact state, and local volume backing data.

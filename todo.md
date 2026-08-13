@@ -156,3 +156,11 @@
 - [x] Ask for local or remote PostgreSQL mode at the GitHub bootstrap entrypoint and forward the choice into the extracted installer.
 - [x] Ask for a remote PostgreSQL URL interactively and document the correct `sudo VAR=value bash` syntax for WSL Bash.
 - [x] Validate the interactive PostgreSQL prompt through a pseudo-terminal.
+
+## Automatic local PostgreSQL installation follow-up
+
+- [x] Install the current stable upstream PostgreSQL server/client automatically from the official PGDG repository when local mode is selected.
+- [x] Keep local PostgreSQL bound to the host loopback and apply only lightweight Porter-compatible settings.
+- [x] Create and use one dedicated `porter` application role and `porter` database; do not grant the app superuser privileges.
+- [x] Make local setup idempotent and safe to rerun without replacing the Porter password unexpectedly.
+- [x] Validate the automatic local install path with shell tests and update the release PR.

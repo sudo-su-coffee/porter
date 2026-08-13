@@ -8,6 +8,20 @@ Database migration `0012_seed_rbac_admin` creates the username `admin` with an e
 
 There is intentionally **no fixed default password**. `install-linux.sh` or `install-porter.sh` generates a random bootstrap password if one was not supplied, writes it to `/var/porter/porter.env`, and prints it once. The editable non-secret runtime configuration is `/var/porter/porter.toml`. The environment file is owned by `root:porter` with mode `0640`, and the user should rotate the password after the first login. For an operator-controlled password, export `PORTER_BOOTSTRAP_ADMIN_PASSWORD` before installation.
 
+## One-command installation
+
+After the release package and its checksum sidecar are published, a Linux user
+can install without cloning the repository:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
+```
+
+The script verifies the release archive, runs the PostgreSQL choice, installs
+the Go daemon and embedded dashboard, verifies Firecracker, writes `/var/porter`,
+enables systemd, and prints a readiness table. The final table separates API
+and database startup from KVM/TAP and real guest-artifact readiness.
+
 ## Source-tree installation
 
 ```bash

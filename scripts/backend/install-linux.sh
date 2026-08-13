@@ -175,6 +175,56 @@ else
   systemctl restart porter.service
 fi
 
+check_readiness() {
+  local listen_addr dashboard_base health_url ready=1 runtime_blocked=0 api_status='blocked' db_status='unknown' kvm_status='blocked' fc_status='blocked' guest_status='blocked'
+  listen_addr="${PORTER_LISTEN_ADDR:-:8080}"
+  case "$listen_addr" in
+    :*) dashboard_base="http://127.0.0.1$listen_addr" ;;
+    0.0.0.0:*) dashboard_base="http://127.0.0.1:${listen_addr#*:}" ;;
+    http://*|https://*) dashboard_base="$listen_addr" ;;
+    *) dashboard_base="http://$listen_addr" ;;
+  esac
+  health_url="$dashboard_base/health"
+
+  if [ "${PORTER_NO_START:-0}" = 1 ]; then
+    db_status='not checked (PORTER_NO_START=1)'
+    api_status='not checked (PORTER_NO_START=1)'
+  elif systemctl is-active --quiet porter.service; then
+    db_status='ready (daemon started and migrations did not fail)'
+    if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 "$health_url" >/dev/null 2>&1; then
+      api_status='ready'
+    else
+      api_status='failed health endpoint'
+      ready=0
+    fi
+  else
+    db_status='failed (daemon is not active)'
+    api_status='failed (daemon is not active)'
+    ready=0
+  fi
+
+  if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then kvm_status='ready'; else kvm_status='blocked (/dev/kvm unavailable)'; runtime_blocked=1; fi
+  if [ -x "$FIRECRACKER_BIN" ] && "$FIRECRACKER_BIN" --version >/dev/null 2>&1; then fc_status='ready (binary and version check passed)'; else fc_status='failed'; ready=0; fi
+  if [ -s "$STATE_DIR/base-images/default/vmlinux" ] && [ -s "$STATE_DIR/base-images/default/rootfs.ext4" ]; then guest_status='ready (vmlinux + rootfs.ext4)'; else guest_status='blocked (real guest artifacts missing)'; runtime_blocked=1; fi
+
+  printf '\nPorter readiness\n'
+  printf '  dashboard : %s\n' "$dashboard_base"
+  printf '  API       : %s\n' "$api_status"
+  printf '  database  : %s\n' "$db_status"
+  printf '  KVM/TAP   : %s\n' "$kvm_status"
+  printf '  Firecracker: %s\n' "$fc_status"
+  printf '  guest     : %s\n' "$guest_status"
+  if [ "$ready" -eq 0 ] && [ "${PORTER_NO_START:-0}" != 1 ]; then
+    warn "Porter installed, but one or more runtime readiness checks failed; inspect systemctl status porter.service and journalctl -u porter.service"
+    return 1
+  fi
+  if [ "$runtime_blocked" -eq 1 ]; then
+    warn "Porter API is installed, but microVM boot remains blocked until KVM/TAP and real vmlinux/rootfs.ext4 prerequisites are available"
+  fi
+}
+
+check_readiness
+
 printf '\nPorter Linux installation complete.\n'
 LISTEN_ADDR="${PORTER_LISTEN_ADDR:-:8080}"
 case "$LISTEN_ADDR" in :*) DASHBOARD_URL="http://127.0.0.1$LISTEN_ADDR" ;; *) DASHBOARD_URL="http://$LISTEN_ADDR" ;; esac

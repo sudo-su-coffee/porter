@@ -53,6 +53,12 @@ bash scripts/backend/dev.sh up
 sudo -E bash scripts/backend/install.sh
 ```
 
+After a GitHub Release is published, users can install without cloning:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
+```
+
 The Linux installer does not use Docker. It offers local host PostgreSQL (with
 optional Debian/Ubuntu package installation using `PORTER_INSTALL_SYSTEM_DEPS=1`)
 or a verified remote `PORTER_DATABASE_URL`. The editable non-secret runtime

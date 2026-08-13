@@ -30,6 +30,19 @@ bash scripts/backend/dev.sh clean     # down + remove ./bin
 
 ## Linux beta (single Linux + KVM host)
 
+For a published GitHub Release, the shortest path is one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
+```
+
+The bootstrap downloads the architecture-specific Porter package and its
+checksum sidecar, verifies the package, and delegates to the same installer
+used by the source checkout. Set `PORTER_RELEASE_TAG` for a different release,
+or set `PORTER_RELEASE_PACKAGE_SHA256` explicitly when the checksum sidecar is
+not reachable. The release must include a real base-image bundle; the installer
+will not fabricate one.
+
 For a source checkout, use the daemon installer as root:
 
 ```bash

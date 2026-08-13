@@ -76,4 +76,6 @@ tar -C "$DIST_DIR" -czf "$DIST_DIR/../$BASE_PACKAGE" base-images/default/vmlinux
 tar -C "$DIST_DIR" -czf "$DIST_DIR/../$PACKAGE" porter install-porter.sh install-firecracker.sh postgres.sh install-linux.sh porter.service porter.env.example FIRECRACKER_ARTIFACTS.md base-images release
 PACKAGE_SHA256="$(sha256sum "$DIST_DIR/../$PACKAGE" | awk '{print $1}')"
 BASE_PACKAGE_SHA256="$(sha256sum "$DIST_DIR/../$BASE_PACKAGE" | awk '{print $1}')"
+printf '%s  %s\n' "$PACKAGE_SHA256" "$PACKAGE" > "$DIST_DIR/../$PACKAGE.sha256"
+printf '%s  %s\n' "$BASE_PACKAGE_SHA256" "$BASE_PACKAGE" > "$DIST_DIR/../$BASE_PACKAGE.sha256"
 printf '%s\n' "Built $DIST_DIR/../$PACKAGE" "Package SHA-256: $PACKAGE_SHA256" "Built $DIST_DIR/../$BASE_PACKAGE" "Base package SHA-256: $BASE_PACKAGE_SHA256" "Upload both files to GitHub Releases for $REPOSITORY/$RELEASE_TAG; no upload is performed by this script."

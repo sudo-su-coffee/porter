@@ -66,3 +66,11 @@
 - [x] Make the installer explicitly choose local host PostgreSQL, an operator-managed remote PostgreSQL URL, or a documented external database setup; do not use Docker in the Linux installer.
 - [x] Add non-Docker PostgreSQL checks/installation guidance without pretending the sandbox can prove a real production database connection.
 - [x] Verify systemd, embedded dashboard, direct Firecracker paths, real guest artifacts, and data-directory ownership against the chosen configuration layout.
+
+## One-command install and backend readiness pass
+
+- [x] Reconcile PR #11 and keep one canonical user-facing install command.
+- [x] Make the installer support a noninteractive mode suitable for scripted Linux installation while retaining interactive PostgreSQL selection.
+- [x] Add a final installer status/health check that clearly distinguishes API availability, database readiness, KVM/TAP readiness, Firecracker checksum readiness, and guest-artifact readiness.
+- [x] Re-run the complete API-to-handler/RBAC/Vue audit, backend tests/vet, Vue build, embedded Go build, shell checks, and no-Docker installer scan.
+- [x] Verify the one-command documentation, dashboard URL, config path, credential behavior, and operator-host limitations.

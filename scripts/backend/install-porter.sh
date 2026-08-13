@@ -36,12 +36,19 @@ case "$ARCH" in x86_64|aarch64) ;; *) die "unsupported architecture: $ARCH" ;; e
 case "$REPOSITORY" in */*) ;; *) die "PORTER_GITHUB_REPOSITORY must be owner/repository" ;; esac
 [ -n "$PACKAGE_SHA256" ] || die "PORTER_RELEASE_PACKAGE_SHA256 is required; obtain it from the release manifest"
 
-PACKAGE="porter-${RELEASE_TAG}-${ARCH}.tar.gz"
-URL="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/${PACKAGE}"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
-ARCHIVE="$TMP_DIR/$PACKAGE"
-curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$ARCHIVE" "$URL"
+if [ -n "${PORTER_RELEASE_ARCHIVE:-}" ]; then
+  ARCHIVE="$PORTER_RELEASE_ARCHIVE"
+  [ -f "$ARCHIVE" ] || die "PORTER_RELEASE_ARCHIVE does not exist: $ARCHIVE"
+  PACKAGE="$(basename "$ARCHIVE")"
+else
+  PACKAGE="porter-${RELEASE_TAG}-${ARCH}.tar.gz"
+  URL="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/${PACKAGE}"
+  ARCHIVE="$TMP_DIR/$PACKAGE"
+  curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$ARCHIVE" "$URL"
+fi
+[ -n "$PACKAGE_SHA256" ] || PACKAGE_SHA256="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
 printf '%s  %s\n' "$PACKAGE_SHA256" "$ARCHIVE" | sha256sum -c -
 mkdir -p "$TMP_DIR/package"
 tar --extract --file "$ARCHIVE" --directory "$TMP_DIR/package" --no-same-owner --no-same-permissions

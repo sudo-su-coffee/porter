@@ -4,7 +4,7 @@ Porter boots direct Firecracker microVMs. The release binary and the guest artif
 
 ## Where artifacts live
 
-The installer keeps runtime-owned artifacts under the configured Porter state directory. In development, the direct installer defaults to `.dev/state`; in a host installation, use `/var/lib/porter` or another root-owned state directory.
+The installer keeps runtime-owned artifacts under the configured Porter state directory. In development, the direct installer defaults to `.dev/state`; in a host installation, the canonical editable state directory is `/var/porter` or another operator-selected root-owned state directory.
 
 | Artifact | Default location | Ownership | Used when |
 |---|---|---|---|

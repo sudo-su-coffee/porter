@@ -965,7 +965,9 @@ func (a *API) handleDeploymentUpload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Image string `json:"image"`
 	}
-	if err := readJSON(r, &req); err != nil {
+	if r.Method == http.MethodGet {
+		req.Image = r.URL.Query().Get("image")
+	} else if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}

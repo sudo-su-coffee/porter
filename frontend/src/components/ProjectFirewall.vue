@@ -7,19 +7,26 @@ const props = defineProps({ projectId: { type: String, required: true } });
 const error = ref("");
 const rules = ref([]);
 const stats = ref(null);
+const events = ref([]);
+const whitelist = ref([]);
 const showAdd = ref(false);
 const newRule = ref({ direction: "ingress", action: "deny", proto: "tcp", ports: "", source: "", priority: 100 });
+const ruleDetails = ref({});
 
 async function load() {
   error.value = "";
   const base = `/projects/${props.projectId}/firewall`;
   try {
-    const [r, s] = await Promise.allSettled([
+    const [r, s, e, w] = await Promise.allSettled([
       api(`${base}/rules`),
       api(`${base}/stats`),
+      api(`${base}/events`),
+      api(`${base}/whitelist`, { method: "POST", body: JSON.stringify({}) }),
     ]);
     rules.value = r.status === "fulfilled" && Array.isArray(r.value) ? r.value : [];
     stats.value = s.status === "fulfilled" ? s.value : null;
+    events.value = e.status === "fulfilled" ? (e.value?.events || []) : [];
+    whitelist.value = w.status === "fulfilled" ? (w.value?.whitelist || []) : [];
   } catch (e) {
     error.value = e.message;
   }
@@ -50,6 +57,11 @@ async function setActive(rule, active) {
   } catch (e) {
     toast(e.message, "error");
   }
+}
+
+async function inspect(rule) {
+  try { ruleDetails.value = { ...ruleDetails.value, [rule.id]: await api(`/projects/${props.projectId}/firewall/rules/${encodeURIComponent(rule.id)}`) }; }
+  catch (e) { toast(e.message, "error"); }
 }
 
 async function remove(rule) {
@@ -92,12 +104,15 @@ onMounted(load);
               <span></span>
             </label>
           </td>
-          <td style="text-align:right"><button class="icon-btn danger" title="Delete" @click="remove(r)">✕</button></td>
+          <td style="text-align:right"><button class="btn btn-sm" title="Inspect" @click="inspect(r)">Details</button><button class="icon-btn danger" title="Delete" @click="remove(r)">✕</button><pre v-if="ruleDetails[r.id]" class="settings-json">{{ JSON.stringify(ruleDetails[r.id], null, 2) }}</pre></td>
         </tr>
         <tr v-if="!rules.length"><td colspan="8" class="hint" style="text-align:center; padding:18px">No firewall rules — all traffic allowed by default.</td></tr>
       </tbody>
     </table>
   </div>
+
+  <section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">Effective whitelist</div><span class="hint">{{ whitelist.length }} source(s)</span></div><div v-if="!whitelist.length" class="empty-state">No allow rules currently contribute to the whitelist.</div><div v-else class="resource-link-grid"><div v-for="source in whitelist" :key="source" class="resource-link"><strong class="mono">{{ source || 'any source' }}</strong><span>allow rule source</span></div></div></section>
+  <section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">Firewall events</div><span class="hint">{{ events.length }} event(s)</span></div><div v-if="!events.length" class="empty-state">No persisted firewall/health events for this project.</div><div v-else class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead><tbody><tr v-for="(event, index) in events" :key="event.id || index"><td>{{ event.created_at || event.time || '—' }}</td><td class="mono">{{ event.type || event.event || 'health' }}</td><td class="mono">{{ JSON.stringify(event) }}</td></tr></tbody></table></div></section>
 
   <div class="modal-overlay" v-if="showAdd" @click.self="showAdd = false">
     <div class="modal" style="width:420px">

@@ -8,10 +8,16 @@ const tab = ref(route.meta.accessTab || "orgs");
 const error = ref("");
 const orgs = ref([]);
 const groups = ref([]);
+const projects = ref([]);
+const groupProjects = ref({});
 const members = ref([]);
 const users = ref([]);
 const apiKeys = ref([]);
 const events = ref([]);
+const audit = ref([]);
+const orgDetail = ref(null);
+const defaultOrg = ref(null);
+const groupDetails = ref({});
 
 const newOrg = ref("");
 const newGroup = ref("");
@@ -23,6 +29,7 @@ const keyToken = ref("");
 const roles = ref([]);
 const permissions = ref([]);
 const rolePerms = ref({});
+const roleDetails = ref({});
 const newRole = ref({ id: "", name: "", description: "" });
 const activeOrgId = ref(getOrgId());
 const roleChoices = computed(() => roles.value.length ? roles.value : [{ id: "member" }, { id: "admin" }, { id: "owner" }, { id: "super_admin" }]);
@@ -32,22 +39,90 @@ const TABS = ["orgs", "groups", "members", "users", "apikeys", "roles", "events"
 async function load() {
   error.value = "";
   try {
-    const [o, g, m, u, k, ev] = await Promise.allSettled([
-      api("/orgs"), api("/groups"), api("/orgs/members"), api("/users"), api("/users/me/api-keys"), api("/orgs/events"),
+    const [o, g, p, m, u, k, ev, au, od, current, def] = await Promise.allSettled([
+      api("/orgs"), api("/groups"), api("/projects"), api("/orgs/members"), api("/users"), api("/users/me/api-keys"), api("/orgs/events"), api("/orgs/audit"), api("/org"), api("/orgs/current"), api("/orgs/default"),
     ]);
 		orgs.value = o.status === "fulfilled" ? o.value || [] : [];
 		if (!activeOrgId.value && orgs.value.length) {
 			activeOrgId.value = (orgs.value.find((org) => org.is_default) || orgs.value[0]).id;
 			setOrgId(activeOrgId.value);
 		}
-		groups.value = g.status === "fulfilled" && g.value ? (g.value.groups || g.value) : [];
+			groups.value = g.status === "fulfilled" && g.value ? (g.value.groups || g.value) : [];
+    projects.value = p.status === "fulfilled" ? (p.value || []) : [];
     members.value = m.status === "fulfilled" && m.value ? (m.value.members || []) : [];
     users.value = u.status === "fulfilled" ? u.value || [] : [];
 			apiKeys.value = k.status === "fulfilled" ? k.value || [] : [];
-    events.value = ev.status === "fulfilled" && ev.value ? (ev.value.events || ev.value) : [];
+	    events.value = ev.status === "fulfilled" && ev.value ? (ev.value.events || ev.value) : [];
+    audit.value = au.status === "fulfilled" ? (au.value?.events || au.value?.audit || au.value || []) : [];
+    orgDetail.value = od.status === "fulfilled" ? od.value : (current.status === "fulfilled" ? current.value : null);
+    defaultOrg.value = def.status === "fulfilled" ? def.value : null;
+    for (const group of groups.value) loadGroupProjects(group);
   } catch (e) {
     error.value = e.message;
 	}
+}
+
+async function loadGroupProjects(group) {
+  try { groupProjects.value = { ...groupProjects.value, [group.id]: (await api(`/groups/${group.id}/projects`))?.projects || [] }; }
+  catch (_) { groupProjects.value = { ...groupProjects.value, [group.id]: [] }; }
+}
+
+async function inspectGroup(group) {
+  try { groupDetails.value = { ...groupDetails.value, [group.id]: await api(`/groups/${encodeURIComponent(group.id)}`) }; }
+  catch (err) { error.value = err.message; }
+}
+
+async function updateGroup(group) {
+  const name = prompt("Group name", group.name || "");
+  if (name === null) return;
+  try { await api(`/groups/${group.id}`, { method: "PATCH", body: JSON.stringify({ name }) }); await load(); }
+  catch (err) { error.value = err.message; }
+}
+
+async function deleteGroup(group) {
+  if (!confirm(`Delete group ${group.name}?`)) return;
+  try { await api(`/groups/${group.id}`, { method: "DELETE" }); await load(); }
+  catch (err) { error.value = err.message; }
+}
+
+async function addProjectToGroup(group) {
+  const projectId = prompt("Project ID to add", "");
+  if (!projectId) return;
+  try { await api(`/groups/${group.id}/projects/${encodeURIComponent(projectId)}`, { method: "POST" }); await loadGroupProjects(group); }
+  catch (err) { error.value = err.message; }
+}
+
+async function removeProjectFromGroup(group, project) {
+  if (!confirm(`Remove ${project.name || project.id} from ${group.name}?`)) return;
+  try { await api(`/groups/${group.id}/projects/${encodeURIComponent(project.id)}`, { method: "DELETE" }); await loadGroupProjects(group); }
+  catch (err) { error.value = err.message; }
+}
+
+async function patchOrg() {
+  const name = prompt("Organization name", orgDetail.value?.name || "");
+  if (name === null) return;
+  try { orgDetail.value = await api("/orgs/current", { method: "PATCH", body: JSON.stringify({ name }) }); await load(); }
+  catch (err) { error.value = err.message; }
+}
+
+async function patchLegacyOrg() {
+  const name = prompt("Legacy organization name", orgDetail.value?.name || "");
+  if (name === null) return;
+  try { orgDetail.value = await api("/org", { method: "PATCH", body: JSON.stringify({ name }) }); await load(); }
+  catch (err) { error.value = err.message; }
+}
+
+async function transferOrg() {
+  const orgId = prompt("Destination organization ID", "");
+  if (!orgId) return;
+  try { await api("/orgs/transfer", { method: "POST", body: JSON.stringify({ org_id: orgId }) }); await load(); }
+  catch (err) { error.value = err.message; }
+}
+
+async function deleteCurrentOrg() {
+  if (!confirm("Delete the current organization? This is destructive and may require moving projects first.")) return;
+  try { await api("/orgs/current", { method: "DELETE" }); setOrgId(""); activeOrgId.value = ""; await load(); }
+  catch (err) { error.value = err.message; }
 }
 
 function selectOrg() {
@@ -156,6 +231,22 @@ async function refreshRolePerms(roleId) {
   }
 }
 
+async function inspectRole(role) {
+  try { roleDetails.value = { ...roleDetails.value, [role.id]: await api(`/roles/${encodeURIComponent(role.id)}`) }; }
+  catch (err) { error.value = err.message; }
+}
+
+async function replacePermissions(role) {
+  const value = prompt("Permission IDs as JSON array", JSON.stringify(rolePermsOf(role.id)));
+  if (value === null) return;
+  let selected;
+  try { selected = JSON.parse(value); }
+  catch (_) { error.value = "Permissions must be a JSON array."; return; }
+  if (!Array.isArray(selected)) { error.value = "Permissions must be a JSON array."; return; }
+  try { await api(`/roles/${encodeURIComponent(role.id)}/permissions`, { method: "PUT", body: JSON.stringify({ permissions: selected }) }); await refreshRolePerms(role.id); }
+  catch (err) { error.value = err.message; }
+}
+
 
 onMounted(() => { load(); loadRoles(); });
 </script>
@@ -180,7 +271,12 @@ onMounted(() => { load(); loadRoles(); });
     <div class="filter-bar">
       <input v-model="newOrg" placeholder="New org name" @keyup.enter="createOrg" />
       <button class="btn btn-sm btn-primary" @click="createOrg">+ Create</button>
+      <button class="btn btn-sm" @click="patchOrg">Edit current organization</button>
+      <button class="btn btn-sm" @click="patchLegacyOrg">Edit legacy org contract</button>
+      <button class="btn btn-sm" @click="transferOrg">Transfer organization</button>
+      <button class="btn btn-sm btn-danger" @click="deleteCurrentOrg">Delete current organization</button>
     </div>
+    <section v-if="orgDetail" class="card" style="margin-bottom:16px"><div class="card-title">Current organization</div><pre class="settings-json">{{ JSON.stringify(orgDetail, null, 2) }}</pre><div v-if="defaultOrg" class="hint">Default organization contract: <span class="mono">{{ defaultOrg.name || defaultOrg.id || JSON.stringify(defaultOrg) }}</span></div></section>
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>Name</th><th>Default</th><th>Created</th></tr></thead>
@@ -204,10 +300,10 @@ onMounted(() => { load(); loadRoles(); });
     </div>
     <div class="table-wrap">
       <table class="data-table">
-        <thead><tr><th>Name</th><th>Org</th></tr></thead>
+        <thead><tr><th>Name</th><th>Org</th><th>Projects</th><th>Actions</th></tr></thead>
         <tbody>
-          <tr v-for="g in groups" :key="g.id"><td>{{ g.name }}</td><td class="mono muted">{{ g.org_id }}</td></tr>
-          <tr v-if="!groups.length"><td colspan="2" class="hint" style="text-align:center; padding:18px">No groups yet.</td></tr>
+          <tr v-for="g in groups" :key="g.id"><td>{{ g.name }}</td><td class="mono muted">{{ g.org_id }}</td><td><span class="hint">{{ (groupProjects[g.id] || []).length }} project(s)</span><div v-for="project in (groupProjects[g.id] || [])" :key="project.id" class="hint mono">{{ project.name || project.id }} <button class="btn btn-sm" @click="removeProjectFromGroup(g, project)">Remove</button></div><pre v-if="groupDetails[g.id]" class="settings-json">{{ JSON.stringify(groupDetails[g.id], null, 2) }}</pre></td><td><button class="btn btn-sm" @click="inspectGroup(g)">Details</button><button class="btn btn-sm" @click="updateGroup(g)">Edit</button><button class="btn btn-sm" @click="addProjectToGroup(g)">Add project</button><button class="btn btn-danger btn-sm" @click="deleteGroup(g)">Delete</button></td></tr>
+          <tr v-if="!groups.length"><td colspan="4" class="hint" style="text-align:center; padding:18px">No groups yet.</td></tr>
         </tbody>
       </table>
     </div>
@@ -292,7 +388,9 @@ onMounted(() => { load(); loadRoles(); });
             <td class="hint">{{ rolePermsOf(r.id).length || 0 }} grant(s)</td>
             <td style="text-align:right">
               <div class="actions">
+                <button class="icon-btn" title="Details" @click="inspectRole(r)">⌕</button>
                 <button class="icon-btn" title="Edit" @click="editRole(r)">✎</button>
+                <button class="icon-btn" title="Replace permissions" @click="replacePermissions(r)">✓</button>
                 <button class="icon-btn danger" title="Delete" @click="deleteRole(r)">✕</button>
               </div>
             </td>
@@ -302,6 +400,7 @@ onMounted(() => { load(); loadRoles(); });
       </table>
     </div>
 
+    <div v-for="r in roles" :key="`detail-${r.id}`" v-if="roleDetails[r.id]" class="card" style="margin-top:10px"><div class="card-title">{{ r.name }} detail</div><pre class="settings-json">{{ JSON.stringify(roleDetails[r.id], null, 2) }}</pre></div>
     <div class="page-sub" style="margin:20px 0 10px">Permissions by role</div>
     <div class="card" v-for="r in roles" :key="r.id">
       <div class="page-sub" style="margin-bottom:10px">
@@ -323,5 +422,6 @@ onMounted(() => { load(); loadRoles(); });
     <div class="filter-bar"><span class="hint">Persisted organization health and security events.</span><button class="btn btn-sm" @click="load">Refresh</button></div>
     <div v-if="!events.length" class="empty-state"><strong>No organization events.</strong><span>The backend returned no persisted events for the active organization.</span></div>
     <div v-else class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Event</th></tr></thead><tbody><tr v-for="(event, index) in events" :key="event.id || index"><td class="num muted">{{ event.ts || event.created_at ? new Date(event.ts || event.created_at).toLocaleString() : '—' }}</td><td class="mono">{{ event.event || event.message || JSON.stringify(event) }}</td></tr></tbody></table></div>
+    <div class="page-sub" style="margin:20px 0 10px">Organization audit endpoint</div><pre class="settings-json">{{ JSON.stringify(audit, null, 2) }}</pre>
   </div>
 </template>

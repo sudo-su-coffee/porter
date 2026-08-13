@@ -1,5 +1,5 @@
-<!-- Style: Whatomate-inspired Porter workspace—quiet operator surfaces, explicit
-     runtime state, and reusable data/action patterns instead of chat-specific UI. -->
+<!-- Style: Porter workspace — quiet operator surfaces, explicit runtime state,
+     and reusable data/action patterns for product resources. -->
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";

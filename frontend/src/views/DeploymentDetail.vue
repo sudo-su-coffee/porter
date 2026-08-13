@@ -12,6 +12,7 @@ const deployment = ref(null);
 const checks = ref(null);
 const source = ref(null);
 const logs = ref([]);
+const uploadInfo = ref(null);
 const error = ref("");
 const loading = ref(true);
 const actionBusy = ref(false);
@@ -24,22 +25,49 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [d, c, s, l] = await Promise.allSettled([
-      api(`/projects/${projectId.value}/deployments/${deploymentId.value}`),
+    deployment.value = await api(`/projects/${projectId.value}/deployments/${deploymentId.value}`);
+    const [c, s, l, u] = await Promise.allSettled([
       api(`/projects/${projectId.value}/deployments/${deploymentId.value}/checks`),
       api(`/projects/${projectId.value}/deployments/${deploymentId.value}/source`),
       api(`/projects/${projectId.value}/deployments/${deploymentId.value}/logs`),
+      api(`/projects/${projectId.value}/deployments/upload?image=${encodeURIComponent(deployment.value?.image_digest || "")}`),
     ]);
-    if (d.status === "rejected") throw d.reason;
-    deployment.value = d.value;
     checks.value = c.status === "fulfilled" ? c.value : null;
     source.value = s.status === "fulfilled" ? s.value : null;
     logs.value = l.status === "fulfilled" ? l.value?.logs || [] : [];
+    uploadInfo.value = u.status === "fulfilled" ? u.value : null;
   } catch (e) {
     error.value = e.message;
   } finally {
     loading.value = false;
   }
+}
+
+async function setCheck(check, status) {
+  try { await api(`/projects/${projectId.value}/deployments/${deploymentId.value}/checks/${encodeURIComponent(check.name)}`, { method: "PATCH", body: JSON.stringify({ status, detail: status === "passed" ? "Marked from dashboard" : "Marked for operator review" }) }); toast(`Check ${check.name} set to ${status}`, "success"); await load(); }
+  catch (err) { toast(err.message, "error"); }
+}
+
+async function replaceChecks() {
+  const value = prompt("Required checks as JSON array", JSON.stringify(checkList.value));
+  if (value === null) return;
+  let next;
+  try { next = JSON.parse(value); } catch (_) { toast("Checks must be valid JSON.", "error"); return; }
+  if (!Array.isArray(next)) { toast("Checks must be a JSON array.", "error"); return; }
+  try {
+    await api(`/projects/${projectId.value}/deployments/${deploymentId.value}/checks`, { method: "PUT", body: JSON.stringify({ checks: next }) });
+    toast("Required checks replaced", "success");
+    await load();
+  } catch (err) { toast(err.message, "error"); }
+}
+
+async function setRollout() {
+  const value = prompt("Rollout percentage (0-100)", String(deployment.value?.rollout_percent ?? 0));
+  if (value === null) return;
+  const percent = Number(value);
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100) { toast("Rollout must be an integer from 0 to 100", "error"); return; }
+  try { await api(`/projects/${projectId.value}/deployments/${deploymentId.value}/rollout`, { method: "PUT", body: JSON.stringify({ percent }) }); toast("Rollout updated", "success"); await load(); }
+  catch (err) { toast(err.message, "error"); }
 }
 
 async function act(action, body) {
@@ -80,6 +108,7 @@ onMounted(load);
       <div class="detail-actions">
         <button class="btn btn-sm btn-primary" :disabled="actionBusy || checkState !== 'passed'" @click="act('promote')">Promote</button>
         <button class="btn btn-sm" :disabled="actionBusy" @click="act('rollback')">Rollback</button>
+        <button class="btn btn-sm" :disabled="actionBusy" @click="setRollout">Set rollout</button>
       </div>
     </div>
 
@@ -95,9 +124,9 @@ onMounted(load);
       </div>
 
       <div class="card deployment-detail-card">
-        <div class="card-head"><div class="card-title">Required checks</div><span class="tag" :class="checkState === 'passed' ? 'tag-green' : checkState === 'failed' ? 'tag-red' : 'tag-amber'">{{ checkState }}</span></div>
+        <div class="card-head"><div class="card-title">Required checks</div><div class="detail-actions"><span class="tag" :class="checkState === 'passed' ? 'tag-green' : checkState === 'failed' ? 'tag-red' : 'tag-amber'">{{ checkState }}</span><button class="btn btn-sm" @click="replaceChecks">Replace all</button></div></div>
         <div class="deployment-check-count">{{ passedChecks }}/{{ checkList.length || 0 }} <span class="hint">passed</span></div>
-        <div v-for="check in checkList" :key="check.name" class="deployment-check-row"><span class="runtime-check-icon" :class="check.status === 'passed' ? 'check-ok' : check.status === 'failed' ? 'check-fail' : ''">{{ check.status === 'passed' ? '✓' : check.status === 'failed' ? '!' : '·' }}</span><div><div class="runtime-check-name">{{ check.name }}</div><div class="hint">{{ check.detail || check.status }}</div></div></div>
+        <div v-for="check in checkList" :key="check.name" class="deployment-check-row"><span class="runtime-check-icon" :class="check.status === 'passed' ? 'check-ok' : check.status === 'failed' ? 'check-fail' : ''">{{ check.status === 'passed' ? '✓' : check.status === 'failed' ? '!' : '·' }}</span><div><div class="runtime-check-name">{{ check.name }}</div><div class="hint">{{ check.detail || check.status }}</div></div><div class="detail-actions"><button class="btn btn-sm" @click="setCheck(check, 'passed')">Pass</button><button class="btn btn-sm" @click="setCheck(check, 'failed')">Fail</button><button class="btn btn-sm" @click="setCheck(check, 'running')">Run</button></div></div>
         <div v-if="!checkList.length" class="hint" style="margin-top:12px">No promotion checks configured for this release.</div>
       </div>
 
@@ -106,6 +135,7 @@ onMounted(load);
         <div class="deployment-source-line"><span class="hint">Git URL</span><span class="mono">{{ source?.git_url || deployment.git_url || 'Direct image artifact' }}</span></div>
         <div class="deployment-source-line"><span class="hint">Commit</span><span class="mono">{{ source?.commit || deployment.git_commit || deployment.image_digest || '—' }}</span></div>
         <div class="deployment-source-line"><span class="hint">Rollback target</span><span class="mono">{{ deployment.rollback_to || 'previous release' }}</span></div>
+        <div class="deployment-source-line"><span class="hint">Upload contract</span><span class="mono">{{ uploadInfo?.status || 'not requested' }} {{ uploadInfo?.image || '' }}</span></div>
       </div>
     </section>
 

@@ -6,6 +6,9 @@ import Sparkline from "../components/Sparkline.vue";
 const usage = ref(null);
 const global = ref(null);
 const globalSeries = ref([]);
+const bandwidthDetail = ref(null);
+const requestsDetail = ref(null);
+const usageSeriesDetail = ref(null);
 const error = ref("");
 const loading = ref(true);
 const period = ref("24h");
@@ -44,15 +47,21 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [u, g, ts] = await Promise.allSettled([
+    const [u, g, ts, b, r, usageTs] = await Promise.allSettled([
       api(`/usage?period=${period.value}`),
       api("/global/analytics"),
       api("/global/analytics/timeseries"),
+      api(`/usage/bandwidth?period=${period.value}`),
+      api(`/usage/requests?period=${period.value}`),
+      api(`/usage/timeseries?period=${period.value}`),
     ]);
     if (u.status === "rejected") throw u.reason;
     usage.value = u.value;
     global.value = g.status === "fulfilled" ? g.value : null;
     globalSeries.value = ts.status === "fulfilled" ? ts.value?.series || [] : [];
+    bandwidthDetail.value = b.status === "fulfilled" ? b.value : null;
+    requestsDetail.value = r.status === "fulfilled" ? r.value : null;
+    usageSeriesDetail.value = usageTs.status === "fulfilled" ? usageTs.value : null;
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -89,6 +98,7 @@ onMounted(load);
       <div><span class="stat-label">Signal window</span><strong>{{ globalSeries.length }} points</strong></div>
       <div class="hint">Traffic is collected from Porter’s gateway rings and shown as operational telemetry, not billing truth.</div>
     </div>
+    <section class="card" style="margin-bottom:18px"><div class="card-head"><div class="card-title">Usage endpoint detail</div><span class="hint">{{ period }}</span></div><div class="resource-object-grid"><div class="stat-card"><div class="stat-label">Requests endpoint</div><div class="stat-value">{{ requestsDetail?.requests ?? usage.edge_requests ?? 0 }}</div></div><div class="stat-card"><div class="stat-label">Bandwidth endpoint</div><div class="stat-value">{{ fmtBytes(bandwidthDetail?.bandwidth ?? usage.fast_data_transfer) }}</div></div><div class="stat-card"><div class="stat-label">Timeseries endpoint</div><div class="stat-value">{{ usageSeriesDetail?.series?.length ?? globalSeries.length }}</div></div></div><pre class="settings-json">{{ JSON.stringify({ requests: requestsDetail, bandwidth: bandwidthDetail, timeseries: usageSeriesDetail }, null, 2) }}</pre></section>
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-label">Edge requests</div>

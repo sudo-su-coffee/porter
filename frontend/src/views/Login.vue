@@ -49,6 +49,7 @@ async function onSubmit() {
       <p class="hint" style="margin-top:14px; text-align:center">
         Default: <span class="mono">admin</span> / the password from <span class="mono">porter.toml</span>
       </p>
+      <p class="hint" style="margin-top:10px; text-align:center"><router-link class="back-link" :to="{ name: 'auth-recovery' }">Create account or recover access</router-link></p>
     </form>
   </div>
 </template>

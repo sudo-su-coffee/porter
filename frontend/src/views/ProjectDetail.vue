@@ -12,6 +12,7 @@ import ProjectFirewall from "../components/ProjectFirewall.vue";
 import ProjectCron from "../components/ProjectCron.vue";
 import ProjectSecrets from "../components/ProjectSecrets.vue";
 import ProjectSettings from "../components/ProjectSettings.vue";
+import { toast } from "../components/toast";
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
@@ -28,6 +29,8 @@ const tab = ref("overview");
 const showScale = ref(false);
 const showDomain = ref(false);
 const newEnv = ref({ key: "", value: "" });
+const editingEnv = ref(null);
+const envDraft = ref({ value: "" });
 
 const TABS = ["overview", "deployments", "builds", "analytics", "traffic", "logs", "domains", "environment", "secrets", "crons", "firewall", "settings"];
 
@@ -35,6 +38,18 @@ const runningReplicas = computed(() => vms.value.filter((v) => v.state === "runn
 const healthyReplicas = computed(() => vms.value.filter((v) => v.health_status === "healthy").length);
 const latestDeployment = computed(() => deployments.value[0] || null);
 const directImage = computed(() => project.value?.image || latestDeployment.value?.image || "—");
+const auxiliaryRoutes = [
+  ["project-environments", "Environments", "Branches, preview domains, and deployment targets"],
+  ["project-volumes", "Volumes", "Host-backed persistent storage records"],
+  ["project-hooks", "Webhooks", "Delivery endpoints and manual triggers"],
+  ["project-crons", "Cron jobs", "Scheduled direct-image jobs"],
+  ["project-alerts", "Alerts", "Metric thresholds and silencing"],
+  ["project-redirects", "Redirects", "HTTP source-to-target rules"],
+  ["project-firewall", "Firewall", "Inbound/outbound policy rules"],
+  ["project-networks", "Networks", "TAP and project network allocations"],
+  ["project-members", "Project members", "Scoped member roles"],
+  ["project-git-settings", "Git settings", "Repository and branch provenance"],
+];
 
 async function load() {
   error.value = "";
@@ -93,6 +108,43 @@ async function addEnv() {
 async function removeDomain(d) {
   await api(`/projects/${props.id}/domains/${d.id}`, { method: "DELETE" });
   loadDomains();
+}
+
+async function verifyDomain(d) {
+  try {
+    await api(`/projects/${props.id}/domains/${d.id}/verify`, { method: "POST" });
+    toast("Domain verification requested", "success");
+    await loadDomains();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+function beginEnvEdit(entry) {
+  editingEnv.value = entry.key;
+  envDraft.value = { value: entry.value || "" };
+}
+
+async function saveEnvEdit(entry) {
+  try {
+    await api(`/projects/${props.id}/env/${encodeURIComponent(entry.key)}`, { method: "PATCH", body: JSON.stringify({ value: envDraft.value.value }) });
+    editingEnv.value = null;
+    toast("Environment variable updated", "success");
+    await loadEnv();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+async function removeEnv(entry) {
+  if (!confirm(`Delete environment variable ${entry.key}?`)) return;
+  try {
+    await api(`/projects/${props.id}/env/${encodeURIComponent(entry.key)}`, { method: "DELETE" });
+    toast("Environment variable deleted", "success");
+    await loadEnv();
+  } catch (e) {
+    toast(e.message, "error");
+  }
 }
 
 async function deleteProject() {
@@ -190,6 +242,14 @@ onUnmounted(() => disconnectEvents());
       </div>
     </div>
 
+      <section class="card project-resource-directory">
+        <div class="card-title">Project workspace</div>
+        <div class="page-sub">Open the full operational surfaces for this project. Each page reads and mutates real control-plane resources.</div>
+        <div class="resource-link-grid">
+          <button v-for="[name, label, description] in auxiliaryRoutes" :key="name" class="resource-link" type="button" @click="router.push({ name, params: { projectId: id } })"><strong>{{ label }}</strong><span>{{ description }}</span><span aria-hidden="true">→</span></button>
+        </div>
+      </section>
+
     <!-- Deployments -->
     <div v-if="tab === 'deployments'">
       <div class="filter-bar">
@@ -268,6 +328,7 @@ onUnmounted(() => disconnectEvents());
 
     <!-- Logs -->
     <div v-if="tab === 'logs'">
+      <div class="filter-bar"><span class="hint">Historical tail from the project log store.</span><button class="btn btn-sm btn-primary" @click="router.push({ name: 'project-logs', params: { projectId: id } })">Open live stream</button></div>
       <div class="terminal">
         <div v-for="(l, i) in logs" :key="i" class="tline">{{ l }}</div>
         <div v-if="!logs.length" class="t-empty">No log output yet.</div>
@@ -285,6 +346,7 @@ onUnmounted(() => disconnectEvents());
               <td class="mono">{{ d.domain }}</td>
               <td><span class="tag" :class="d.status === 'active' ? 'tag-green' : 'tag-amber'">{{ d.status || d.type || 'pending' }}</span></td>
               <td style="text-align:right">
+                <button v-if="d.status !== 'active' && d.status !== 'verified'" class="btn btn-sm" @click="verifyDomain(d)">Verify</button>
                 <button class="icon-btn danger" title="Remove" @click="removeDomain(d)">✕</button>
               </td>
             </tr>
@@ -305,13 +367,18 @@ onUnmounted(() => disconnectEvents());
       </div>
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>Key</th><th>Value</th></tr></thead>
+          <thead><tr><th>Key</th><th>Value</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody>
             <tr v-for="e in envVars" :key="e.key">
               <td class="mono">{{ e.key }}</td>
-              <td class="mono muted">{{ e.value }}</td>
+              <td v-if="editingEnv !== e.key" class="mono muted">{{ e.value }}</td>
+              <td v-else><input v-model="envDraft.value" class="mono" /></td>
+              <td style="text-align:right">
+                <template v-if="editingEnv === e.key"><button class="btn btn-sm btn-primary" @click="saveEnvEdit(e)">Save</button><button class="btn btn-sm" @click="editingEnv = null">Cancel</button></template>
+                <template v-else><button class="btn btn-sm" @click="beginEnvEdit(e)">Edit</button><button class="icon-btn danger" title="Delete" @click="removeEnv(e)">✕</button></template>
+              </td>
             </tr>
-            <tr v-if="!envVars.length"><td colspan="2" class="hint" style="text-align:center; padding:18px">No environment variables.</td></tr>
+            <tr v-if="!envVars.length"><td colspan="3" class="hint" style="text-align:center; padding:18px">No environment variables.</td></tr>
           </tbody>
         </table>
       </div>

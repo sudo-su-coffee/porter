@@ -61,8 +61,8 @@
 
 ## API, configuration, and PostgreSQL deployment review
 
-- [ ] Re-run the 311-route API-to-handler/RBAC/Vue coverage audit after the interrupted Linux release edits.
-- [ ] Decide and document the canonical editable TOML path under `/var/lib/porter`, while keeping secrets in a protected environment file.
-- [ ] Make the installer explicitly choose local host PostgreSQL, an operator-managed remote PostgreSQL URL, or a documented external database setup; do not use Docker in the Linux installer.
-- [ ] Add non-Docker PostgreSQL checks/installation guidance without pretending the sandbox can prove a real production database connection.
-- [ ] Verify systemd, embedded dashboard, direct Firecracker paths, real guest artifacts, and data-directory ownership against the chosen configuration layout.
+- [x] Re-run the 311-route API-to-handler/RBAC/Vue coverage audit after the interrupted Linux release edits.
+- [x] Decide and document the canonical editable TOML path under `/var/lib/porter`, while keeping secrets in a protected environment file.
+- [x] Make the installer explicitly choose local host PostgreSQL, an operator-managed remote PostgreSQL URL, or a documented external database setup; do not use Docker in the Linux installer.
+- [x] Add non-Docker PostgreSQL checks/installation guidance without pretending the sandbox can prove a real production database connection.
+- [x] Verify systemd, embedded dashboard, direct Firecracker paths, real guest artifacts, and data-directory ownership against the chosen configuration layout.

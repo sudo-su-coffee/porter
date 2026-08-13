@@ -84,12 +84,13 @@ PORTER_BASE_IMAGE_DIR=/path/to/base-image \
 
 The release helper refuses to package a release without non-empty `vmlinux` and `rootfs.ext4` artifacts.
 
-The automated release workflow is `.github/workflows/release.yml`. Run it from
-the GitHub Actions tab with a pre-published GitHub Release URL and SHA-256 for a
-real guest bundle, or configure the equivalent repository secrets and push a
-`v*` tag. It produces the daemon archive, base-image archive, and checksum
-sidecars consumed by the one-command installer; it does not fabricate guest
-artifacts.
+The automated release workflow is `.github/workflows/release.yml`. For guest
+files around 50 MB, upload `vmlinux` and `rootfs.ext4` at the repository root,
+as separate assets in a GitHub Release named `base-images-v1.0.0-beta-dev`, or
+under `release/guest-artifacts/x86_64/`. Then run **Actions → Porter Linux
+release** or push a `v*` tag. The workflow calculates checksums and produces the
+daemon archive, base-image archive, and checksum sidecars consumed by the
+one-command installer; it does not fabricate guest artifacts.
 
 ## Documentation map
 

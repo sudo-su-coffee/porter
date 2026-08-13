@@ -118,3 +118,23 @@
 - [ ] Require a real `vmlinux`/`rootfs.ext4` bundle or a secure operator-provided artifact URL/input.
 - [ ] Build the Vue dashboard and Go daemon, verify Firecracker checksums, create daemon/base-image archives and sidecars, and publish a GitHub Release.
 - [ ] Validate the published asset names against `install-from-github.sh` before telling the user to rerun the one-command installer.
+
+## Guest bundle URL verification
+
+- [ ] Search official Firecracker and related GitHub sources for a compatible guest kernel/rootfs pair.
+- [ ] Verify that any candidate URL contains both `vmlinux` and `rootfs.ext4`, with architecture and checksums.
+- [ ] Reject hypervisor-only release URLs, arbitrary mirrors, and unverified demo artifacts.
+- [ ] Give the user a precise workflow input URL only if it is safe and compatible; otherwise explain how to create or host the bundle.
+
+## Separate release artifact inputs
+
+- [x] Keep the official Firecracker VMM download/checksum separate from guest `vmlinux` and `rootfs.ext4` inputs.
+- [x] Allow manual GitHub Release upload of `vmlinux` and `rootfs.ext4` as separate assets or a verified bundle.
+- [x] Add separate kernel/rootfs asset and folder inputs to the release workflow, with architecture selection and automatic checksum calculation.
+- [x] Document the exact GitHub web steps for uploading guest files and starting the workflow.
+- [ ] Validate that the resulting Porter release archive and installer use the uploaded guest files without OCI/containerd runtime dependencies.
+
+## Live guest-artifact upload check
+
+- [ ] Inspect `main` for the uploaded `vmlinux` and `rootfs.ext4` paths, names, sizes, and latest commit.
+- [ ] Confirm whether the current workflow’s architecture folder or fallback Release-asset path will consume them.

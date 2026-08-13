@@ -43,11 +43,17 @@ or set `PORTER_RELEASE_PACKAGE_SHA256` explicitly when the checksum sidecar is
 not reachable. The release must include a real base-image bundle; the installer
 will not fabricate one.
 
-To create those release assets, use the repository’s **Actions → Porter Linux
-release** workflow. Supply a pre-published GitHub Release URL for a real
-`vmlinux`/`rootfs.ext4` bundle and its SHA-256 digest, or configure
-`PORTER_BASE_IMAGE_URL` and `PORTER_BASE_IMAGE_SHA256` repository secrets before
-pushing a `v*` tag. The workflow intentionally fails when that input is absent.
+For files around 50 MB, you may upload the two files at the repository root as
+`vmlinux` and `rootfs.ext4`, as the current main branch does, or create a GitHub
+Release named
+`base-images-v1.0.0-beta-dev` and upload two assets named exactly `vmlinux` and
+`rootfs.ext4`. Then use **Actions → Porter Linux release → Run workflow**, enter
+`v1.0.0-beta-dev` and `x86_64`, and start the run. The workflow downloads the
+two separate assets and calculates SHA-256 values automatically; there are no
+SHA inputs. Alternatively, smaller Git-LFS-managed files can live at
+`release/guest-artifacts/x86_64/vmlinux` and
+`release/guest-artifacts/x86_64/rootfs.ext4`. The workflow intentionally fails
+when it cannot find either real file.
 
 For a source checkout, use the daemon installer as root:
 

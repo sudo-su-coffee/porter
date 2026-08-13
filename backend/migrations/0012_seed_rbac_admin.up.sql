@@ -8,9 +8,9 @@ ON CONFLICT (username) DO NOTHING;
 -- The admin's default org is also persisted; all later membership and
 -- permission checks resolve through these database rows.
 INSERT INTO orgs (owner_id, name, is_default)
-SELECT u.id, 'Default organization', true
+SELECT u.username, 'Default organization', true
 FROM users u
 WHERE u.username = 'admin'
   AND NOT EXISTS (
-    SELECT 1 FROM orgs o WHERE o.owner_id = u.id AND o.is_default = true
+    SELECT 1 FROM orgs o WHERE o.owner_id = u.username AND o.is_default = true
   );

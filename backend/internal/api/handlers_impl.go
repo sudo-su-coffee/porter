@@ -123,7 +123,7 @@ func (a *API) issueUserToken(user *types.User) (string, error) {
 	raw := store.NewID() + store.NewID() // 64 hex chars — unguessable
 	k := &types.APIKey{
 		ID:        store.NewID(),
-		UserID:    user.Username,
+		UserID:    user.ID,
 		Name:      "session",
 		TokenHash: hashToken(raw),
 		CreatedAt: time.Now(),
@@ -179,7 +179,12 @@ func (a *API) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.ListAPIKeys(currentUser(r)))
+	user, ok := a.store.GetUserByUsername(currentUser(r))
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authenticated user not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, a.store.ListAPIKeys(user.ID))
 }
 
 func (a *API) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
@@ -193,8 +198,13 @@ func (a *API) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		req.Name = "default"
 	}
+	user, ok := a.store.GetUserByUsername(currentUser(r))
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authenticated user not found")
+		return
+	}
 	raw := store.NewID()
-	k := &types.APIKey{ID: store.NewID(), UserID: currentUser(r), Name: req.Name, TokenHash: hashToken(raw), CreatedAt: time.Now()}
+	k := &types.APIKey{ID: store.NewID(), UserID: user.ID, Name: req.Name, TokenHash: hashToken(raw), CreatedAt: time.Now()}
 	a.store.PutAPIKey(k)
 	writeJSON(w, http.StatusCreated, map[string]any{"api_key": k, "token": raw})
 }
@@ -3765,7 +3775,7 @@ func (a *API) handleHostKernel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-    writeError(w, http.StatusNotFound, "vmlinux not found on host; run `porter kernel set <url>` (see scripts/backend/install.sh)")
+	writeError(w, http.StatusNotFound, "vmlinux not found on host; run `porter kernel set <url>` (see scripts/backend/install.sh)")
 }
 
 // handleHostPrerequisites exposes the same direct-Firecracker readiness checks

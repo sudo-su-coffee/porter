@@ -4,12 +4,12 @@ The Backend workstream keeps its operational scripts in one group:
 
 ```
 scripts/backend/
-├── install.sh             production install (Linux + KVM, run as root)
-├── install-linux.sh       source-tree Linux daemon installer with embedded Vue dashboard
-├── dev.sh                 local dev (Docker for Postgres, real microVM boots)
-├── install-firecracker.sh checksum-pinned Firecracker helper
-├── install-porter.sh      verified GitHub Release installer
-└── build-release.sh       daemon and base-image release builder
+├── install.sh             single production install for source checkouts and GitHub Releases
+└── dev.sh                 only development entrypoint
+
+The Firecracker, PostgreSQL, release-package, and source-build scripts remain
+internal helpers called by these two entrypoints; they are not separate public
+installation commands.
 ```
 
 ## Dev
@@ -33,7 +33,7 @@ bash scripts/backend/dev.sh clean     # down + remove ./bin
 For a published GitHub Release, the shortest path is one command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh | sudo bash
 ```
 
 The installer pauses at the terminal and asks for the PostgreSQL mode. Enter
@@ -46,11 +46,11 @@ The equivalent non-interactive commands are:
 
 ```bash
 # Local PostgreSQL on this host.
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh \
   | sudo PORTER_POSTGRES_MODE=local bash
 
 # Remote PostgreSQL.
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh \
   | sudo PORTER_POSTGRES_MODE=remote \
        PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
 ```
@@ -87,7 +87,7 @@ For a source checkout, use the daemon installer as root:
 
 ```bash
 sudo PORTER_BASE_IMAGE_DIR=/var/porter/base-images/default \
-  bash scripts/backend/install-linux.sh
+  bash scripts/backend/install.sh
 ```
 
 The installer builds `frontend/` first, writes the result to `backend/web/dist`,
@@ -122,7 +122,7 @@ sudo -E bash scripts/backend/install.sh  # everything, self-contained
 systemctl start porter
 ```
 
-`install.sh` provisions PostgreSQL for development, checks KVM and TAP
+`install.sh` provisions PostgreSQL for production, checks KVM and TAP
 prerequisites, downloads a checksum-pinned official Firecracker binary from
 GitHub, validates a real Porter base-image bundle when configured, builds the
 Go daemon, and writes direct-runtime configuration. Config lands in the local
@@ -133,9 +133,10 @@ For a compiled GitHub release, run `scripts/backend/build-release.sh` with
 `PORTER_BASE_IMAGE_DIR` pointing to a directory containing real `vmlinux` and
 `rootfs.ext4`. The builder first compiles the Vue dashboard and embeds it in the
 Linux Go binary, then creates a daemon package and a separate base-image package.
-Upload both assets to the Porter GitHub Release, then install with
-`scripts/backend/install-porter.sh` and a mandatory `PORTER_RELEASE_PACKAGE_SHA256`. No AWS
-bucket or arbitrary mirror is used.
+Upload both assets to the Porter GitHub Release, then install with the public
+`install.sh` bootstrap and a mandatory `PORTER_RELEASE_PACKAGE_SHA256` only
+when the checksum sidecar is unavailable. No AWS bucket or arbitrary mirror is
+used.
 
 The current development sandbox does not expose `/dev/kvm` and does not contain
 a user-supplied `vmlinux`/`rootfs.ext4` pair, so it can validate compilation,

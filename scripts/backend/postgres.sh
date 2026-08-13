@@ -82,9 +82,13 @@ porter_pg_setup_local() {
 
   password="${PORTER_PG_PASSWORD:-$(porter_pg_random_password)}"
   if porter_pg_as_postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$user'" | grep -q 1; then
-    porter_pg_as_postgres psql -v porter_password="$password" -v ON_ERROR_STOP=1 -c "ALTER ROLE \"$user\" WITH LOGIN PASSWORD :'porter_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" >/dev/null
+    porter_pg_as_postgres psql -v porter_password="$password" -v ON_ERROR_STOP=1 >/dev/null <<SQL
+ALTER ROLE "$user" WITH LOGIN PASSWORD :'porter_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+SQL
   else
-    porter_pg_as_postgres psql -v porter_password="$password" -v ON_ERROR_STOP=1 -c "CREATE ROLE \"$user\" LOGIN PASSWORD :'porter_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" >/dev/null
+    porter_pg_as_postgres psql -v porter_password="$password" -v ON_ERROR_STOP=1 >/dev/null <<SQL
+CREATE ROLE "$user" LOGIN PASSWORD :'porter_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+SQL
   fi
   if ! porter_pg_as_postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'" | grep -q 1; then
     porter_pg_as_postgres createdb -O "$user" "$db"

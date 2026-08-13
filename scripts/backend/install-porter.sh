@@ -25,6 +25,7 @@ generate_password() {
 generate_secret() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -hex 32; else od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; fi
 }
+write_env_assignment() { printf '%s=%q\n' "$1" "$2"; }
 
 [ "$(uname -s)" = Linux ] || die "this installer supports Linux only"
 [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0"
@@ -90,22 +91,22 @@ fi
 : "${PORTER_BOOTSTRAP_ADMIN_PASSWORD:=$(generate_password)}"
 : "${PORTER_SECRET_KEY:=$(generate_secret)}"
 [ "${#PORTER_BOOTSTRAP_ADMIN_PASSWORD}" -ge 12 ] || die "bootstrap password must be at least 12 characters"
-cat > "$ENV_FILE" <<EOF
-PORTER_DATABASE_URL=$PORTER_DATABASE_URL
-PORTER_BOOTSTRAP_ADMIN_PASSWORD=$PORTER_BOOTSTRAP_ADMIN_PASSWORD
-PORTER_SECRET_KEY=$PORTER_SECRET_KEY
-PORTER_LISTEN_ADDR=${PORTER_LISTEN_ADDR:-:8080}
-PORTER_RUNTIME_MODE=direct
-PORTER_FIRECRACKER_BIN=$PREFIX/bin/firecracker
-PORTER_FIRECRACKER_API_SOCKET_DIR=$RUN_DIR/firecracker
-PORTER_KERNEL_IMAGE=$STATE_DIR/base-images/default/vmlinux
-PORTER_ROOTFS_PATH=$STATE_DIR/base-images/default/rootfs.ext4
-PORTER_LOGS_DIR=$LOG_DIR
-PORTER_IMAGES_DIR=$STATE_DIR/images
-PORTER_CUSTOM_IMAGES_DIR=$STATE_DIR/custom
-PORTER_VOLUMES_DIR=$STATE_DIR/volumes
-PORTER_HEALTH_ENABLED=${PORTER_HEALTH_ENABLED:-true}
-EOF
+{
+  write_env_assignment PORTER_DATABASE_URL "$PORTER_DATABASE_URL"
+  write_env_assignment PORTER_BOOTSTRAP_ADMIN_PASSWORD "$PORTER_BOOTSTRAP_ADMIN_PASSWORD"
+  write_env_assignment PORTER_SECRET_KEY "$PORTER_SECRET_KEY"
+  write_env_assignment PORTER_LISTEN_ADDR "${PORTER_LISTEN_ADDR:-:8080}"
+  write_env_assignment PORTER_RUNTIME_MODE direct
+  write_env_assignment PORTER_FIRECRACKER_BIN "$PREFIX/bin/firecracker"
+  write_env_assignment PORTER_FIRECRACKER_API_SOCKET_DIR "$RUN_DIR/firecracker"
+  write_env_assignment PORTER_KERNEL_IMAGE "$STATE_DIR/base-images/default/vmlinux"
+  write_env_assignment PORTER_ROOTFS_PATH "$STATE_DIR/base-images/default/rootfs.ext4"
+  write_env_assignment PORTER_LOGS_DIR "$LOG_DIR"
+  write_env_assignment PORTER_IMAGES_DIR "$STATE_DIR/images"
+  write_env_assignment PORTER_CUSTOM_IMAGES_DIR "$STATE_DIR/custom"
+  write_env_assignment PORTER_VOLUMES_DIR "$STATE_DIR/volumes"
+  write_env_assignment PORTER_HEALTH_ENABLED "${PORTER_HEALTH_ENABLED:-true}"
+} > "$ENV_FILE"
 chown root:porter "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
 cat > "$ETC_DIR/porter.toml" <<EOF

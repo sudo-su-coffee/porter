@@ -145,6 +145,7 @@ jobs:
           (cd "$dist" && sha256sum -c "$(basename "${package}.sha256")")
           (cd "$dist" && sha256sum -c "$(basename "${base_package}.sha256")")
           tar -tzf "$package" | grep -Fx 'porter'
+          tar -tzf "$package" | grep -Fx 'install.sh'
           tar -tzf "$package" | grep -Fx 'install-porter.sh'
           tar -tzf "$package" | grep -Fx 'postgres.sh'
           tar -tzf "$package" | grep -Fx 'porter.service'

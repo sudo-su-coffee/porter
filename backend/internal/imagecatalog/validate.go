@@ -102,7 +102,8 @@ func ManifestFromArtifacts(name, reference, description, kind, rootfs, kernel st
 		Kind: kind, Rootfs: filepath.Clean(rootfs), Kernel: filepath.Clean(kernel),
 		Architecture: report.Architecture, RootfsSHA256: report.RootfsSHA256,
 		KernelSHA256: report.KernelSHA256, Status: status, ValidatedAt: &now,
-		VCPUs: vcpus, MemMiB: memMiB, Version: "v1",
+		VCPUs: vcpus, MemMiB: memMiB, Ports: []types.Port{}, Env: map[string]string{}, Tags: []string{},
+		Logo: "", Version: "v1",
 		CreatedAt: now,
 	}
 }

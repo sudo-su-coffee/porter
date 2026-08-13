@@ -53,10 +53,10 @@ bash scripts/backend/dev.sh up
 sudo bash scripts/backend/install.sh
 ```
 
-After a GitHub Release is published, users can install without cloning:
+After a GitHub Release is published, users can install without cloning through the single production entrypoint:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh | sudo bash
 ```
 
 During this command, answer `1` to use PostgreSQL on the Linux host, or answer
@@ -66,11 +66,11 @@ exported user-shell variable:
 
 ```bash
 # Local PostgreSQL on this host.
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh \
   | sudo PORTER_POSTGRES_MODE=local bash
 
 # Remote PostgreSQL; the URL is read by the installer and stored in porter.env.
-curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install-from-github.sh \
+curl -fsSL https://raw.githubusercontent.com/sudo-su-coffee/porter/main/scripts/backend/install.sh \
   | sudo PORTER_POSTGRES_MODE=remote \
        PORTER_DATABASE_URL='postgres://porter:password@db.example.com:5432/porter?sslmode=require' bash
 ```

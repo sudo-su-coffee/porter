@@ -4,16 +4,15 @@ This audit records the completed review of `internal/api/api.go` against the Por
 
 ## Coverage result
 
-The API registration table now contains **301 registered routes**. Every unique handler referenced by `api.go` has a declaration, and every authenticated route is present in the `routePerms` map. The static route coverage test also confirms that no permission-map entry is dead.
+The API registration table now contains **311 registered routes**. Every unique handler referenced by `api.go` has a declaration, and every authenticated route is present in the `routePerms` map. The static route coverage test also confirms that no permission-map entry is dead.
 
 | Check | Result |
 |---|---|
-| Registered route entries | 301 |
-| Unique registered handler references | 288 |
-| Unique declared `handle*` methods | 288 |
+| Registered route entries | 311 |
+| Central RBAC route-permission entries | 296 |
 | Registered handlers without declarations | 0 |
-| Authenticated routes missing RBAC mapping | 0 |
 | Dead RBAC route mappings | 0 |
+| Authenticated routes missing RBAC mapping | 0 |
 | `go test ./...` | Passed |
 | `go vet ./...` | Passed |
 

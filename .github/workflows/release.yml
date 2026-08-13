@@ -142,8 +142,8 @@ jobs:
           base_package="${dist}/porter-base-image-${RELEASE_TAG}-${ARCH}.tar.gz"
           test -s "$package"
           test -s "$base_package"
-          sha256sum -c "${package}.sha256"
-          sha256sum -c "${base_package}.sha256"
+          (cd "$dist" && sha256sum -c "$(basename "${package}.sha256")")
+          (cd "$dist" && sha256sum -c "$(basename "${base_package}.sha256")")
           tar -tzf "$package" | grep -Fx 'porter'
           tar -tzf "$package" | grep -Fx 'install-porter.sh'
           tar -tzf "$package" | grep -Fx 'postgres.sh'

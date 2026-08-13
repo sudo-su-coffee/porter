@@ -138,3 +138,9 @@
 
 - [ ] Inspect `main` for the uploaded `vmlinux` and `rootfs.ext4` paths, names, sizes, and latest commit.
 - [ ] Confirm whether the current workflow’s architecture folder or fallback Release-asset path will consume them.
+
+## Release workflow checksum fix
+
+- [x] Verify the release builder’s relative checksum filenames against the workflow working directory.
+- [x] Fix checksum verification for both daemon and base-image archives.
+- [x] Re-run local archive/checksum validation and push the focused workflow fix for an Actions rerun.

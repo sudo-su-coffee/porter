@@ -8,8 +8,13 @@
 # installer. Development uses scripts/backend/dev.sh.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
+SOURCE_PATH="${BASH_SOURCE[0]-}"
+SCRIPT_DIR=''
+REPO_DIR=''
+if [ -n "$SOURCE_PATH" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SOURCE_PATH")" && pwd)"
+  REPO_DIR="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
+fi
 
 if [ -d "$REPO_DIR/backend" ] && [ -d "$REPO_DIR/frontend" ] && [ -x "$SCRIPT_DIR/install-linux.sh" ]; then
   exec "$SCRIPT_DIR/install-linux.sh" "$@"
@@ -67,9 +72,16 @@ fi
 case "$EXPECTED" in ''|*[!0-9a-fA-F]*) die "release checksum is not hexadecimal" ;; esac
 [ "${#EXPECTED}" -eq 64 ] || die "release checksum must contain 64 hex characters"
 
+CACHE_OK=0
 if [ -s "$ARCHIVE" ] && (cd "$CACHE_DIR" && printf '%s  %s\n' "$EXPECTED" "$PACKAGE" | sha256sum -c - >/dev/null 2>&1); then
-  printf 'Using verified cached release archive: %s\n' "$ARCHIVE"
-else
+  if tar -tzf "$ARCHIVE" | grep -Fxq 'install.sh'; then
+    CACHE_OK=1
+    printf 'Using verified cached release archive: %s\n' "$ARCHIVE"
+  else
+    printf 'Cached release archive is legacy; refreshing it for the current install.sh flow.\n' >&2
+  fi
+fi
+if [ "$CACHE_OK" -ne 1 ]; then
   rm -f "$ARCHIVE"
   ARCHIVE_TMP="$CACHE_DIR/.${PACKAGE}.tmp.$$"
   curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$ARCHIVE_TMP" "$BASE_URL/$PACKAGE"

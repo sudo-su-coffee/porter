@@ -24,13 +24,13 @@ const uploading = ref(false);
 const composeName = ref("");
 const composeYaml = ref(`services:
   api:
-    image: myapp/api:latest
+    image: custom://myapp-api
     ports:
       - "3000:3000"
     deploy:
       replicas: 2
   worker:
-    image: myapp/worker:latest
+    image: custom://myapp-worker
     depends_on:
       - api`);
 
@@ -138,14 +138,14 @@ async function deploy() {
       <div class="modal-title">New Project</div>
       <div class="tabs">
         <button class="tab" :class="{ active: activeTab === 'single' }" @click="activeTab = 'single'">
-          Single Image
+          Direct Image
         </button>
         <button class="tab" :class="{ active: activeTab === 'compose' }" @click="activeTab = 'compose'">
-          docker-compose.yml
+          Compose Manifest
         </button>
-        <button class="tab" :class="{ active: activeTab === 'library' }" @click="loadLibrary">Image Library</button>
+        <button class="tab" :class="{ active: activeTab === 'library' }" @click="loadLibrary">Direct Image Library</button>
         <button class="tab" :class="{ active: activeTab === 'custom' }" @click="activeTab = 'custom'">
-          Custom MicroVM
+          Custom Firecracker Bundle
         </button>
       </div>
 
@@ -153,7 +153,8 @@ async function deploy() {
 
       <div v-show="activeTab === 'single'">
         <div class="field"><label>Name</label><input v-model="name" placeholder="cache" /></div>
-        <div class="field"><label>Image</label><input v-model="image" placeholder="redis:7" /></div>
+        <div class="field"><label>Direct image reference</label><input v-model="image" placeholder="custom://my-app" /></div>
+        <div class="hint" style="margin-top:-5px; margin-bottom:14px">Porter boots a kernel + rootfs.ext4 pair directly; registry and container-runtime references are not resolved.</div>
         <div class="field-row">
           <div class="field"><label>vCPUs</label><input v-model="vcpus" type="number" min="1" /></div>
           <div class="field">
@@ -166,7 +167,7 @@ async function deploy() {
       <div v-show="activeTab === 'compose'">
         <div class="field"><label>Project name</label><input v-model="composeName" placeholder="my-app" /></div>
         <div class="field">
-          <label>compose.yaml</label>
+          <label>compose.yaml (direct image refs)</label>
           <textarea v-model="composeYaml"></textarea>
         </div>
       </div>
@@ -178,7 +179,7 @@ async function deploy() {
           <div class="field"><label>Memory (MiB)</label><input v-model="customMemMib" type="number" min="128" step="128" /></div>
         </div>
         <div class="field">
-          <label>MicroVM image (.zip — rootfs.ext4 + vmlinux)</label>
+          <label>Firecracker image (.zip — rootfs.ext4 + vmlinux)</label>
           <input type="file" accept=".zip,application/zip" @change="(e) => (customFile = e.target.files[0] || null)" />
           <div class="hint" style="margin-top:6px">Boots your own kernel + rootfs directly with Firecracker.</div>
         </div>

@@ -1,11 +1,7 @@
 package netmgr
 
 import (
-	"encoding/json"
 	"net"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -77,27 +73,6 @@ func TestGatewayIP(t *testing.T) {
 	sub := mustCIDR(t, "10.42.7.0/24")
 	if got := GatewayIP(sub).String(); got != "10.42.7.1" {
 		t.Fatalf("expected gateway .1, got %s", got)
-	}
-}
-
-func TestWriteCNIConfig(t *testing.T) {
-	dir := t.TempDir()
-	n := NewNetManager()
-	sub := mustCIDR(t, "10.42.3.0/24")
-	ip := net.ParseIP("10.42.3.10")
-	if err := n.WriteCNIConfig(dir, "myproj", sub, ip, GatewayIP(sub)); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "myproj.conflist"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "tc-redirect-tap") {
-		t.Fatal("conflist missing tc-redirect-tap plugin")
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
 	}
 }
 

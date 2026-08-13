@@ -138,6 +138,24 @@ onUnmounted(() => disconnectEvents());
     </div>
   </div>
 
+  <section class="deployment-command-deck">
+    <div class="command-copy">
+      <div class="command-kicker">PORTER / DEPLOY</div>
+      <h1>Ship a healthy microVM, not a fragile pile of runtime glue.</h1>
+      <p>Choose a direct image, bring your own Firecracker bundle, or open an existing project to watch its replica pool settle.</p>
+      <div class="command-actions">
+        <button class="btn btn-primary" @click="router.push({ name: 'images' })">Browse direct images</button>
+        <button class="btn" @click="load">Refresh host</button>
+      </div>
+    </div>
+    <div class="command-note">
+      <div class="command-kicker">RUNTIME</div>
+      <div class="command-note-title">Firecracker over Unix sockets</div>
+      <div class="command-note-line"><span class="conn-dot live"></span>Kernel + rootfs artifacts stay explicit</div>
+      <div class="command-note-line"><span class="conn-dot live"></span>Replica health stays visible after boot</div>
+    </div>
+  </section>
+
   <div v-if="error" class="error-box">{{ error }}</div>
 
   <OverviewBar :overview="overview" :loading="loading" />

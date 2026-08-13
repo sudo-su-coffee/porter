@@ -1,19 +1,16 @@
 // Package netmgr owns the networking pieces Porter is responsible for: a
 // per-project private /24 subnet, static IP assignment per replica, a
-// deterministic MAC per VM, and the CNI config the containerd firecracker
-// shim consumes (tc-redirect-tap plugin). Porter never reimplements what CNI
-// already does — it only writes the config and owns the IPAM (Unified Spec §1).
+// deterministic MAC per VM, and a host TAP device consumed directly by
+// Firecracker. Porter owns the IPAM and passes the resulting TAP/MAC contract
+// to the Unix-socket runtime.
 package netmgr
 
 import (
 	"crypto/md5"
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 )
 
@@ -37,17 +34,36 @@ func (n *NetManager) AllocateProjectSubnet() string {
 }
 
 // AllocateVMNetwork derives the boot-time network identity for one VM within
-// its project subnet and creates the host-side tap device.
-func (n *NetManager) AllocateVMNetwork(subnetCIDR string, replicaIndex int, vmID string) BootSpec {
+// its project subnet and creates/configures the host-side TAP device. The
+// gateway address is assigned to the TAP so the guest's static route has a
+// real host endpoint before the Firecracker API receives InstanceStart.
+func (n *NetManager) AllocateVMNetwork(subnetCIDR string, replicaIndex int, vmID string) (BootSpec, error) {
 	var a, b, c int
-	fmt.Sscanf(subnetCIDR, "%d.%d.%d.", &a, &b, &c)
-	ip := fmt.Sprintf("%d.%d.%d.%d", a, b, c, 5+replicaIndex)
+	if _, err := fmt.Sscanf(subnetCIDR, "%d.%d.%d.", &a, &b, &c); err != nil {
+		return BootSpec{}, fmt.Errorf("netmgr: invalid project subnet %q: %w", subnetCIDR, err)
+	}
+	if replicaIndex < 0 || replicaIndex > 245 {
+		return BootSpec{}, fmt.Errorf("netmgr: replica index %d out of range", replicaIndex)
+	}
+	ip := fmt.Sprintf("%d.%d.%d.%d", a, b, c, 10+replicaIndex)
 	gw := fmt.Sprintf("%d.%d.%d.1", a, b, c)
 	mac := bootMAC(vmID)
 	tapName := "tap-" + bootShortID(vmID)
-	_ = exec.Command("ip", "tuntap", "add", tapName, "mode", "tap").Run()
-	_ = exec.Command("ip", "link", "set", tapName, "up").Run()
-	return BootSpec{MacAddress: mac, HostDevName: tapName, CIDR: ip + "/24", GatewayAddr: gw}
+	// A stale TAP can survive a crashed Porter process. Delete only this
+	// deterministic device, then recreate it with an explicit gateway address.
+	_ = exec.Command("ip", "link", "del", tapName).Run()
+	if err := exec.Command("ip", "tuntap", "add", "dev", tapName, "mode", "tap").Run(); err != nil {
+		return BootSpec{}, fmt.Errorf("netmgr: create TAP %s: %w", tapName, err)
+	}
+	if err := exec.Command("ip", "addr", "replace", gw+"/24", "dev", tapName).Run(); err != nil {
+		_ = exec.Command("ip", "link", "del", tapName).Run()
+		return BootSpec{}, fmt.Errorf("netmgr: assign gateway %s to TAP %s: %w", gw, tapName, err)
+	}
+	if err := exec.Command("ip", "link", "set", "dev", tapName, "up").Run(); err != nil {
+		_ = exec.Command("ip", "link", "del", tapName).Run()
+		return BootSpec{}, fmt.Errorf("netmgr: bring TAP %s up: %w", tapName, err)
+	}
+	return BootSpec{MacAddress: mac, HostDevName: tapName, CIDR: ip + "/24", GatewayAddr: gw}, nil
 }
 
 // bootMAC derives a stable MAC for the boot path (kept on the 02:FC prefix).
@@ -109,67 +125,8 @@ func (n *NetManager) AllocateIP(subnet net.IPNet, replicaIndex int) (net.IP, err
 	return out, nil
 }
 
-// DeterministicMAC derives a stable MAC address from a VM id, so a VM keeps
-// the same link-layer identity across restarts.
-func DeterministicMAC(vmID string) (net.HardwareAddr, error) {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(vmID))
-	sum := h.Sum64()
-	// Use the 06: local-bit prefix and derive the rest from the hash.
-	return net.HardwareAddr{
-		0x06,
-		byte(sum >> 40), byte(sum >> 32), byte(sum >> 24), byte(sum >> 16), byte(sum >> 8),
-	}, nil
-}
-
-// CNIConfig is the tc-redirect-tap plugin config the firecracker shim needs.
-type CNIConfig struct {
-	CNIVersion string      `json:"cniVersion"`
-	Name       string      `json:"name"`
-	Plugins    []cniPlugin `json:"plugins"`
-}
-
-type cniPlugin struct {
-	Type        string `json:"type"`
-	TapIface    string `json:"tap_iface_name,omitempty"`
-	MTU         int    `json:"mtu,omitempty"`
-	IPAM        any    `json:"ipam,omitempty"`
-	BinDir      string `json:"bin_dir,omitempty"`
-	ConfDir     string `json:"conf_dir,omitempty"`
-}
-
-// WriteCNIConfig writes a per-project CNI network config to dir/name.conflist.
-func (n *NetManager) WriteCNIConfig(dir, projectID string, subnet net.IPNet, ip net.IP, gw net.IP) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("netmgr: mkdir %s: %w", dir, err)
-	}
-	cfg := CNIConfig{
-		CNIVersion: "0.4.0",
-		Name:       projectID,
-		Plugins: []cniPlugin{
-			{
-				Type:     "tc-redirect-tap",
-				TapIface: "tap-" + shortName(projectID),
-				MTU:      1500,
-				IPAM: map[string]any{
-					"type": "static",
-					"addresses": []map[string]any{{
-						"address": fmt.Sprintf("%s/%d", ip.String(), prefixLen(subnet)),
-					}},
-					"routes": []map[string]any{{"dst": "0.0.0.0/0"}},
-					"gateway": gw.String(),
-				},
-			},
-		},
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("netmgr: marshal cni: %w", err)
-	}
-	return os.WriteFile(filepath.Join(dir, projectID+".conflist"), data, 0o644)
-}
-
-// GatewayIP returns the .1 host gateway for a /24 subnet.
+// GatewayIP returns the host-side .1 address for a project /24. Direct
+// Firecracker networking assigns this address to the per-VM TAP device.
 func GatewayIP(subnet net.IPNet) net.IP {
 	ip := subnet.IP.To4()
 	if ip == nil {
@@ -181,14 +138,15 @@ func GatewayIP(subnet net.IPNet) net.IP {
 	return out
 }
 
-func prefixLen(subnet net.IPNet) int {
-	ones, _ := subnet.Mask.Size()
-	return ones
-}
-
-func shortName(s string) string {
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
+// DeterministicMAC derives a stable MAC address from a VM id, so a VM keeps
+// the same link-layer identity across restarts.
+func DeterministicMAC(vmID string) (net.HardwareAddr, error) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(vmID))
+	sum := h.Sum64()
+	// Use the 06: local-bit prefix and derive the rest from the hash.
+	return net.HardwareAddr{
+		0x06,
+		byte(sum >> 40), byte(sum >> 32), byte(sum >> 24), byte(sum >> 16), byte(sum >> 8),
+	}, nil
 }

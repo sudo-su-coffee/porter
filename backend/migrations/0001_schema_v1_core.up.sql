@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS vms (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     service_id      UUID NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     replica_index   INT NOT NULL DEFAULT 0,
-    container_id    TEXT,                       -- containerd container ID, null until boot starts
-    task_id         TEXT,                       -- containerd task ID
+    container_id    TEXT,                       -- legacy runtime ID, empty for direct Firecracker
+    task_id         TEXT,                       -- legacy task ID, empty for direct Firecracker
     state           TEXT NOT NULL DEFAULT 'pending'
                     CHECK (state IN ('pending','booting','running','stopping','stopped','failed')),
     health_status   TEXT NOT NULL DEFAULT 'checking'
@@ -163,12 +163,12 @@ CREATE TABLE IF NOT EXISTS networks (
 );
 CREATE INDEX IF NOT EXISTS idx_networks_project ON networks(project_id);
 
--- 0006_golden_images: reusable VM templates / image library for v0.4.
--- Images are referenced by OCI ref (URL or registry image), never local dirs.
+-- 0006_golden_images: reusable VM templates / direct image library for v0.4.
+-- Deployable images resolve to a host rootfs/kernel manifest in the JSON data.
 CREATE TABLE IF NOT EXISTS golden_images (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT NOT NULL UNIQUE,
-    image       TEXT NOT NULL,          -- OCI ref, e.g. redis:7-alpine
+    image       TEXT NOT NULL,          -- stable catalog ref, e.g. custom://redis
     description TEXT NOT NULL DEFAULT '',
     vcpus       INT NOT NULL DEFAULT 1,
     mem_mib     INT NOT NULL DEFAULT 256,
@@ -201,4 +201,3 @@ CREATE TABLE IF NOT EXISTS health_events (
     ts         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_health_events_vm_ts ON health_events(vm_id, ts);
-

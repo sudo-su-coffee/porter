@@ -1,15 +1,14 @@
 # ============================================================================
 #  Porter — example runtime configuration (backend/).
 #
-#  Copy this to `porter.toml` (or point PORTER_CONFIG at it) and edit the
-#  secrets before running `porter server`. A missing file is not an error:
-#  every key has a built-in default and can be overridden by a PORTER_* env
-#  var (noted inline), so this file is optional.
+#  Copy this to `porter.toml` (or point PORTER_CONFIG at it) before running
+#  `porter server`. Credentials are not stored here: migrations seed the
+#  initial RBAC account and the process receives bootstrap/encryption secrets
+#  through PORTER_BOOTSTRAP_ADMIN_PASSWORD and PORTER_SECRET_KEY.
 #
-#  REQUIRED (Porter refuses to start without these):
-#    [server] api_token        (or PORTER_API_TOKEN)
-#    [admin]  password         (or PORTER_ADMIN_PASSWORD)
+#  REQUIRED for an operational deployment:
 #    [database] url            (or PORTER_DATABASE_URL)
+#    real vmlinux + rootfs.ext4 artifacts at the firecracker paths below
 # ============================================================================
 
 # ---------------------------------------------------------------------------
@@ -33,11 +32,6 @@ base_domain = "porter.test"
 # rate_limit_per_min = 120
 #   Override: PORTER_RATE_LIMIT_PER_MIN
 
-# api_token — bearer token required on every protected API request. This is
-# the control-plane secret; inject it via PORTER_API_TOKEN in production.
-api_token = "change-me"
-#   Override: PORTER_API_TOKEN
-
 # ---------------------------------------------------------------------------
 [database]
 # url — PostgreSQL connection string. PostgreSQL is the required backend.
@@ -50,26 +44,30 @@ auto_migrate = true
 
 # ---------------------------------------------------------------------------
 [firecracker]
-# containerd_socket — Unix socket for containerd. Porter boots OCI images via
-# containerd + the aws.firecracker shim.
-containerd_socket = "/run/containerd/containerd.sock"
-#   Override: PORTER_CONTAINERD_SOCKET
+# runtime_mode — direct Firecracker is the only backend execution mode.
+# Deployments must resolve to a host kernel + rootfs.ext4 artifact.
+runtime_mode = "direct"
+#   Override: PORTER_RUNTIME_MODE
 
-# snapshotter — containerd snapshotter images are pulled/unpacked into.
-# "overlayfs" works in WSL2; use "devmapper" on a host provisioned by
-# backend/deploy/host/01-containerd.sh.
-snapshotter = "overlayfs"
-#   Override: PORTER_SNAPSHOTTER
+# base_image_ref — persisted image-catalog reference resolved before boot.
+base_image_ref = "base://default"
 
-# namespace — containerd namespace Porter's images live in.
-namespace = "porter"
-#   Override: PORTER_NAMESPACE
+# api_socket_dir — parent directory for one Firecracker API Unix socket per VM.
+api_socket_dir = "/run/porter/firecracker"
+#   Override: PORTER_FIRECRACKER_API_SOCKET_DIR
 
-# kernel_image — shared microkernel (vmlinux) for every microVM. Provision it
-# with `porter kernel set <path|URL>`; keep this pointing at the copy the host
-# shim uses (e.g. /var/lib/porter/vmlinux).
+# kernel_image — shared microkernel (vmlinux) for every microVM.
+# Provision it with `porter kernel set <path|URL>`.
 kernel_image = "/var/lib/porter/vmlinux"
 #   Override: PORTER_KERNEL_IMAGE
+
+# rootfs_path — default rootfs.ext4 used when a VM has no per-VM rootfs_path.
+rootfs_path = "/var/lib/porter/rootfs.ext4"
+#   Override: PORTER_ROOTFS_PATH
+
+# firecracker_bin — direct Firecracker VMM binary.
+firecracker_bin = "firecracker"
+#   Override: PORTER_FIRECRACKER_BIN
 
 # logs_dir — directory where per-VM stdio logs are written.
 logs_dir = "/var/log/porter"
@@ -84,18 +82,6 @@ images_dir = "vms/images"
 custom_images_dir = "vms/custom"
 #   Override: PORTER_CUSTOM_IMAGES_DIR
 
-# ---------------------------------------------------------------------------
-[admin]
-# username — bootstrap admin login for the dashboard.
-username = "admin"
-#   Override: PORTER_ADMIN_USERNAME
-
-# password — admin password. Compare is constant-time; pass it via
-# PORTER_ADMIN_PASSWORD in production rather than writing it to disk.
-password = "change-me"
-#   Override: PORTER_ADMIN_PASSWORD
-
-# ---------------------------------------------------------------------------
 [gateway]
 # enabled — host-routing reverse proxy (Vercel-style) on its own listener.
 # Routes by Host header to the healthy replica pool and logs every request to
@@ -139,8 +125,8 @@ enabled = true
 
 # ---------------------------------------------------------------------------
 [ssh]
-# enabled — SSH gateway (short-lived CA-signed user certs). Requires a
-# containerd task.Exec bridge, which is not yet wired; leave false.
+# enabled — SSH gateway (short-lived CA-signed user certs). Direct Firecracker
+# currently requires a future guest-vsock agent for interactive exec; leave false.
 enabled = false
 #   Override: PORTER_SSH_ENABLED
 

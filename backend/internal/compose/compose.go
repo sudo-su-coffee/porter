@@ -235,7 +235,7 @@ func parsePort(item string) (types.Port, error) {
 	if err != nil {
 		return types.Port{}, fmt.Errorf("invalid port %q", item)
 	}
-	
+
 	hostPort := 0
 	if len(parts) > 1 {
 		hp, err := strconv.Atoi(parts[0])
@@ -243,7 +243,7 @@ func parsePort(item string) (types.Port, error) {
 			hostPort = hp
 		}
 	}
-	
+
 	return types.Port{ContainerPort: p, HostPort: hostPort, Protocol: proto}, nil
 }
 

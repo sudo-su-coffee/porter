@@ -1,7 +1,7 @@
 // Package sshgw is the SSH gateway — the only Porter component meant to be
 // internet-facing. There is NO sshd inside the guest: the gateway terminates
-// SSH and bridges the session to the VM via containerd task.Exec() over vsock
-// (Unified Spec §1). Certs are short-lived user certs signed by the gateway CA.
+// SSH and will bridge the session through a future guest-vsock agent. Certs are
+// short-lived user certs signed by the gateway CA.
 package sshgw
 
 import (
@@ -19,8 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Execer is the bridge to the VM's task.Exec channel; satisfied by the
-// containerd-backed executor wired in at construction.
+// Execer is the bridge to a direct guest-vsock execution channel.
 type Execer interface {
 	Exec(ctx context.Context, vmID string, stdin interface{}, stdout interface{}) error
 }
@@ -105,10 +104,10 @@ func (g *Gateway) SignCertificate(pubKey []byte, vmID string) ([]byte, error) {
 		return nil, err
 	}
 	cert := &ssh.Certificate{
-		Key:         parsed,
-		Serial:      uint64(time.Now().UnixNano()),
-		CertType:    ssh.UserCert,
-		KeyId:       vmID,
+		Key:             parsed,
+		Serial:          uint64(time.Now().UnixNano()),
+		CertType:        ssh.UserCert,
+		KeyId:           vmID,
 		ValidAfter:      uint64(time.Now().Add(-time.Minute).Unix()),
 		ValidBefore:     uint64(time.Now().Add(10 * time.Minute).Unix()),
 		ValidPrincipals: []string{vmID},

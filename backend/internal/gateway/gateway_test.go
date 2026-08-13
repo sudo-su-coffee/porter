@@ -28,8 +28,8 @@ func (f *fakeStore) GetVM(id string) (*types.VM, bool) {
 	}
 	return nil, false
 }
-func (f *fakeStore) ListVMs() []*types.VM                     { return f.vms }
-func (f *fakeStore) ListDomains(vmID string) []*types.Domain  { return f.domains[vmID] }
+func (f *fakeStore) ListVMs() []*types.VM                    { return f.vms }
+func (f *fakeStore) ListDomains(vmID string) []*types.Domain { return f.domains[vmID] }
 func (f *fakeStore) ListFirewallRules(p string) []*types.FirewallRule {
 	return f.rules
 }

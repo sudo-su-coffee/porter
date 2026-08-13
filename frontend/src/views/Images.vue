@@ -22,7 +22,7 @@ function onLogoError(e) { e.target.src = FALLBACK; }
 
 const filtered = computed(() => {
   let out = images.value;
-  if (kind.value !== "all") out = out.filter((i) => (i.kind || "oci") === kind.value);
+  if (kind.value !== "all") out = out.filter((i) => (i.kind || "direct") === kind.value);
   if (q.value.trim()) {
     const s = q.value.toLowerCase();
     out = out.filter((i) => [i.name, i.image, i.description].filter(Boolean).join(" ").toLowerCase().includes(s));
@@ -31,8 +31,8 @@ const filtered = computed(() => {
 });
 
 const kinds = computed(() => {
-  const set = new Set(["oci"]);
-  for (const i of images.value) set.add(i.kind || "oci");
+  const set = new Set(["direct"]);
+  for (const i of images.value) set.add(i.kind || "direct");
   return [...set];
 });
 
@@ -65,7 +65,7 @@ onMounted(async () => {
   <div class="page-header">
     <div>
       <div class="page-title">Image Library</div>
-      <div class="page-sub">Reusable microVM images — OCI refs and your uploaded custom microVMs.</div>
+      <div class="page-sub">Reusable direct Firecracker images with the kernel and rootfs artifacts Porter can boot on this host.</div>
     </div>
   </div>
 
@@ -86,7 +86,7 @@ onMounted(async () => {
 
   <div v-else-if="!images.length" class="empty-state">
     <div style="font-size:15px; margin-bottom:8px">No images in the library</div>
-    Upload your own microVM (.zip) via <b>New Project → Custom MicroVM</b>.
+      Upload your own Firecracker bundle (.zip with <span class="mono">rootfs.ext4</span> + <span class="mono">vmlinux</span>) via <b>New Project</b>.
   </div>
 
   <div v-else class="image-grid">
@@ -97,13 +97,18 @@ onMounted(async () => {
       <div class="image-card-name">{{ img.name }}</div>
       <div class="image-card-ref">{{ img.image }}</div>
       <div class="image-card-meta">
-        <span class="image-tag">{{ img.kind || 'oci' }}</span>
+        <span class="image-tag">{{ img.kind || 'direct' }}</span>
         <span class="image-tag">{{ img.mem_mib }}MB</span>
         <span class="image-tag">{{ img.vcpus }}vcpu</span>
         <span v-if="img.rootfs" class="image-tag" :title="img.rootfs">rootfs</span>
+        <span v-if="img.kernel" class="image-tag" :title="img.kernel">kernel</span>
         <span v-for="t in img.tags || []" :key="t" class="image-tag">{{ t }}</span>
       </div>
-      <div class="image-card-hint">{{ img.description }}</div>
+      <div class="image-card-hint">{{ img.description || 'Direct Firecracker boot artifact' }}</div>
+      <div v-if="img.rootfs || img.kernel" class="image-card-artifacts">
+        <div v-if="img.rootfs" class="mono">rootfs · {{ img.rootfs }}</div>
+        <div v-if="img.kernel" class="mono">kernel · {{ img.kernel }}</div>
+      </div>
       <div class="detail-actions" style="margin-top:10px">
         <button class="btn btn-sm" @click="copyRef(img)">Copy ref</button>
         <button class="btn btn-sm btn-primary" @click="deployFrom(img)">Deploy</button>

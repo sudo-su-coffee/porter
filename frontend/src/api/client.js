@@ -1,10 +1,9 @@
 // Thin wrapper around fetch() for the Porter Control API.
 //
-// Auth: a single admin login (configured in porter.toml, no user
-// database) gates access to this dashboard. Signing in just hands back
-// the same bearer token the Control API has always used — /login is a
-// gate in front of that token, not a new auth scheme for the REST API
-// itself.
+// Auth: login and bearer tokens are resolved from the database-seeded RBAC
+// model. Users, organizations, roles, permissions, sessions, and API keys
+// are persisted resources; porter.toml contains no admin bypass or shared
+// control token.
 //
 // CSRF: the Control API requires an X-CSRF-Token header on every
 // state-changing (non-GET) request. We fetch it once from GET /csrf after
@@ -12,6 +11,7 @@
 // scale, start/stop/restart, domains, teams, …) depend on this.
 
 const TOKEN_KEY = "porter_token";
+const ORG_KEY = "porter_org_id";
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || "";
@@ -22,7 +22,16 @@ export function setToken(token) {
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
+	localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getOrgId() {
+	return localStorage.getItem(ORG_KEY) || "";
+}
+
+export function setOrgId(orgId) {
+	if (orgId) localStorage.setItem(ORG_KEY, orgId);
+	else localStorage.removeItem(ORG_KEY);
 }
 
 // Set by main.js so the client can force a redirect to /login on 401
@@ -58,11 +67,12 @@ export async function ensureCsrf() {
 
 export async function api(path, opts = {}) {
   const method = (opts.method || "GET").toUpperCase();
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${getToken()}`,
-    ...(opts.headers || {}),
-  };
+	const headers = {
+		"Content-Type": "application/json",
+		Authorization: `Bearer ${getToken()}`,
+		...(getOrgId() ? { "X-Porter-Org-Id": getOrgId() } : {}),
+		...(opts.headers || {}),
+	};
   if (method !== "GET" && method !== "HEAD") {
     const csrf = await ensureCsrf();
     if (csrf) headers["X-CSRF-Token"] = csrf;

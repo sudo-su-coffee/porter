@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -30,7 +31,10 @@ import (
 	"strings"
 	"time"
 
+	"porter/internal/auth"
 	"porter/internal/compose"
+	"porter/internal/imagecatalog"
+	"porter/internal/startup"
 	"porter/internal/store"
 	"porter/internal/types"
 	"porter/internal/volumes"
@@ -100,15 +104,8 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	// Bootstrap admin from config.
-	if req.Username == a.adminUser && req.Password == a.adminPass {
-		writeJSON(w, http.StatusOK, map[string]any{"token": a.token, "user": map[string]any{"username": req.Username, "role": "admin"}})
-		return
-	}
-	// Additional users in the store — each login issues a per-user API token so
-	// the bearer credential resolves back to that user (per-user RBAC).
 	if user, ok := a.store.GetUserByUsername(req.Username); ok {
-		if constantTimeEqual(passwordHash(req.Password, user.Salt), user.PasswordHash) {
+		if auth.VerifyPassword(req.Password, user.Salt, user.PasswordHash) {
 			token, err := a.issueUserToken(user)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to issue token")
@@ -144,48 +141,45 @@ func (a *API) handleSignup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePasswordForgot(w http.ResponseWriter, r *http.Request) {
-	// Single-tenant: the only account is the bootstrap admin whose password
-	// lives in porter.toml [admin]. Self-service reset has no backend by design —
-	// surface the real remediation path instead of a fake "email sent".
-	a.store.AppendDaemonLog("password reset requested for single-tenant admin (no email backend)")
+	// Password recovery is intentionally explicit: no email provider or reset
+	// token store is present in this beta release.
+	a.store.AppendDaemonLog("password reset requested; no recovery provider configured")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "unsupported",
-		"account": a.adminUser,
-		"reason":  "single-tenant config-admin; change [admin] password in porter.toml and restart the service",
+		"status": "unsupported",
+		"reason": "password recovery provider is not configured; an authorized operator must rotate the database credential",
 	})
 }
 
 func (a *API) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
-	a.store.AppendDaemonLog("password reset token attempt rejected (single-tenant, no token store)")
+	a.store.AppendDaemonLog("password reset token attempt rejected; no token store configured")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "unsupported",
-		"account": a.adminUser,
-		"reason":  "single-tenant config-admin; change [admin] password in porter.toml and restart the service",
+		"status": "unsupported",
+		"reason": "password reset tokens are not configured",
 	})
 }
 
 func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": a.userIDFromHeader(r)})
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": currentUser(r)})
 }
 
 func (a *API) handleMe(w http.ResponseWriter, r *http.Request) {
-	if u, ok := a.store.GetUserByUsername(a.userIDFromHeader(r)); ok {
+	if u, ok := a.store.GetUserByUsername(currentUser(r)); ok {
 		writeJSON(w, http.StatusOK, u)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"username": a.adminUser, "role": "admin", "id": "admin"})
+	writeError(w, http.StatusUnauthorized, "authenticated user not found")
 }
 
 func (a *API) handlePatchMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "note": "account updates not persisted for config-admin in this mode"})
+	writeJSON(w, http.StatusNotImplemented, map[string]any{"status": "unsupported", "reason": "profile updates are not implemented in beta-dev"})
 }
 
 func (a *API) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusForbidden, "cannot delete the bootstrap admin")
+	writeError(w, http.StatusForbidden, "self-delete is disabled; an organization owner must remove the account")
 }
 
 func (a *API) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.ListAPIKeys("*"))
+	writeJSON(w, http.StatusOK, a.store.ListAPIKeys(currentUser(r)))
 }
 
 func (a *API) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
@@ -200,7 +194,7 @@ func (a *API) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		req.Name = "default"
 	}
 	raw := store.NewID()
-	k := &types.APIKey{ID: store.NewID(), UserID: "*", Name: req.Name, TokenHash: hashToken(raw), CreatedAt: time.Now()}
+	k := &types.APIKey{ID: store.NewID(), UserID: currentUser(r), Name: req.Name, TokenHash: hashToken(raw), CreatedAt: time.Now()}
 	a.store.PutAPIKey(k)
 	writeJSON(w, http.StatusCreated, map[string]any{"api_key": k, "token": raw})
 }
@@ -215,8 +209,7 @@ func (a *API) handleDeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 
 // passwordHash reproduces the salted-hash scheme used at user creation.
 func passwordHash(password, salt string) string {
-	h := sha256.Sum256([]byte(salt + password))
-	return hex.EncodeToString(h[:])
+	return auth.HashPassword(password, salt)
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +667,10 @@ func (a *API) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if a.secretKeyMaterial == "" {
+		writeError(w, http.StatusServiceUnavailable, "project secret encryption is not configured; set PORTER_SECRET_KEY")
+		return
+	}
 	enc, err := a.encryptSecret(req.Value)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encrypt secret: "+err.Error())
@@ -695,10 +692,10 @@ func (a *API) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
 
-// secretKey derives a stable 32-byte AES key from the API token so secrets can
-// be stored encrypted-at-rest and decrypted for injection into VM env.
+// secretKey derives a stable 32-byte AES key from the dedicated secret
+// material. Authorization credentials are never reused for encryption.
 func (a *API) secretKey() []byte {
-	key := sha256.Sum256([]byte("porter-secrets:" + a.token))
+	key := sha256.Sum256([]byte(a.secretKeyMaterial))
 	return key[:]
 }
 
@@ -1491,6 +1488,21 @@ func (a *API) handleReplicaLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"logs": a.store.TailLogs(vmID, tailN(r))})
 }
 
+func (a *API) handleReplicaLogStream(w http.ResponseWriter, r *http.Request) {
+	vmID := r.PathValue("replicaId")
+	if _, ok := a.store.GetVM(vmID); !ok {
+		writeError(w, http.StatusNotFound, "replica not found")
+		return
+	}
+	serveLogStream(w, r, func() logStreamPayload {
+		vm, found := a.store.GetVM(vmID)
+		if !found {
+			return logStreamPayload{Source: "replica", Status: "missing"}
+		}
+		return logStreamPayload{Source: "replica", Lines: a.store.TailLogs(vmID, 300), Status: string(vm.State)}
+	}, nil)
+}
+
 func (a *API) handleReplicaMetrics(w http.ResponseWriter, r *http.Request) {
 	vmID := a.vmAtReplica(a.projectID(r), replicaIndex(r))
 	writeJSON(w, http.StatusOK, a.store.ListMetrics(vmID, 60))
@@ -1519,10 +1531,10 @@ func (a *API) handleSSHCert(w http.ResponseWriter, r *http.Request) {
 	vmID := a.vmAtReplica(a.projectID(r), replicaIndex(r))
 	if execer, ok := a.vmm.(Execer); ok && vmID != "" {
 		_ = execer
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ssh via task.Exec", "replica": vmID, "host": vmInfoIP(a.store, vmID), "port": 22, "user": "root"})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ssh via guest agent", "replica": vmID, "host": vmInfoIP(a.store, vmID), "port": 22, "user": "root"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ssh unsupported (no containerd exec)", "replica": vmID})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ssh unsupported until the guest-vsock agent is enabled", "replica": vmID})
 }
 
 func (a *API) handleReplicaExec(w http.ResponseWriter, r *http.Request) {
@@ -1635,14 +1647,14 @@ func (a *API) handleSSHCertByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "replica not found")
 		return
 	}
-	// SSH to a VM is real when the runtime exposes an Execer (containerd task).
+	// SSH becomes real when the direct guest-vsock agent exposes an Execer.
 	exe, ok := a.vmm.(Execer)
 	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ssh unsupported for this replica (no containerd exec)", "replica": vm.ID, "host": vm.IPAddress, "port": 22})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ssh unsupported until the guest-vsock agent is enabled", "replica": vm.ID, "host": vm.IPAddress, "port": 22})
 		return
 	}
 	_ = exe
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ssh available via task.Exec", "replica": vm.ID, "host": vm.IPAddress, "user": "root", "port": 22})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ssh available via guest agent", "replica": vm.ID, "host": vm.IPAddress, "user": "root", "port": 22})
 }
 
 func (a *API) handleReplicaExecByID(w http.ResponseWriter, r *http.Request) {
@@ -1662,7 +1674,7 @@ func (a *API) handleReplicaExecByID(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cmd is required")
 		return
 	}
-	// Real exec: bridge into the VM's containerd task when supported.
+	// Real exec: bridge into the guest-vsock agent when supported.
 	execer, ok := a.vmm.(Execer)
 	if !ok {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "exec unsupported for this replica", "replica": vm.ID, "cmd": req.Cmd})
@@ -1738,16 +1750,17 @@ func (a *API) handleDeployGit(w http.ResponseWriter, r *http.Request) {
 	}
 	b := &types.Build{ID: store.NewID(), ProjectID: proj.ID, GitURL: u, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
 	a.store.PutBuild(b)
-	a.store.AppendBuildLog(proj.ID, "git deploy queued (clones + builds + boots microVM)")
+	a.store.AppendBuildLogFor(proj.ID, b.ID, "git deploy queued (source detection + direct artifact validation)")
 	go a.runGitBuild(b, r)
 	d := &types.Deployment{ID: store.NewID(), ProjectID: proj.ID, BuildStatus: "building", CreatedAt: time.Now()}
 	_ = a.store.CreateDeployment(d)
 	writeJSON(w, http.StatusAccepted, d)
 }
 
-// runGitBuild performs a REAL git clone of a public repo, detects a Dockerfile
-// (or the user's `.github/workflows/build.yml`), and records honest build logs.
-// The clone+bake flow is synchronous here; layer a queued worker on top later.
+// runGitBuild performs a real git clone and accepts only a direct Firecracker
+// artifact layout. The repository must contain rootfs.ext4 and vmlinux either
+// at its root or under .porter/. Dockerfile/Compose-to-guest conversion is a
+// separate build subsystem and must not be reported as ready here.
 func (a *API) runGitBuild(b *types.Build, r *http.Request) {
 	a.runGitBuildCtx(b)
 	_ = r
@@ -1762,74 +1775,89 @@ func (a *API) runGitBuildCtx(b *types.Build) {
 	defer os.RemoveAll(dir)
 
 	logf := func(line string) {
-		a.store.AppendBuildLog(projID, line)
+		a.store.AppendBuildLogFor(projID, b.ID, line)
 		a.store.AppendDaemonLog("build " + b.ID + ": " + line)
 	}
 
-	cmds := []struct {
-		args []string
-		name string
-	}{
-		{[]string{"clone", "--depth", "1", "--branch", orDefault(b.Branch, "main"), b.GitURL, dir}, "git clone"},
-		{[]string{"ls", dir + "/Dockerfile"}, "detect Dockerfile"},
-		{[]string{"ls", dir + "/.github/workflows/build.yml"}, "detect build.yml"},
-	}
-	for _, c := range cmds {
-		if err := execShell(c.name, c.args...); err != nil {
-			logf(fmt.Sprintf("%s failed: %v", c.name, err))
-			b.BuildStatus = "failed"
-			b.Log += c.name + " failed\n"
-			a.store.PutBuild(b)
-			return
-		}
-	}
-	logf("repository cloned; Dockerfile present — building image")
-	// Real OCI image build: prefer the containerd-native path. Try docker
-	// first, then the standalone BuildKit CLI (buildctl). Each produces a
-	// docker-format tarball that is imported straight into containerd's
-	// content store under the "porter" namespace — no registry round-trip.
-	ref := "porter/" + b.ProjectID + ":" + shortBuildRef(b)
-	attempts := []struct {
-		name string
-		c    []string
-	}{
-		{
-			name: "docker build + import",
-			c:    []string{"sh", "-c", fmt.Sprintf("docker build -t %s %s && docker save %s | ctr --namespace porter images import -", ref, dir, ref)},
-		},
-		{
-			name: "buildctl + import",
-			c:    []string{"sh", "-c", fmt.Sprintf("buildctl build --frontend dockerfile.v0 --local context=%s --local dockerfile=%s --output type=docker,name=%s | ctr --namespace porter images import -", dir, dir, ref)},
-		},
-	}
-	built := false
-	for _, at := range attempts {
-		if _, err := exec.LookPath(strings.Fields(at.c[0])[0]); err != nil {
-			logf(at.name + " unavailable (%v) — trying next backend")
-			continue
-		}
-		if err := execCommand(at.c...); err != nil {
-			logf(fmt.Sprintf("%s failed: %v", at.name, err))
-			continue
-		}
-		logf(fmt.Sprintf("%s succeeded → image %s imported into containerd", at.name, ref))
-		b.Image = ref
-		b.BuildStatus = "ready"
+	if err := execShell("git clone", "clone", "--depth", "1", "--branch", orDefault(b.Branch, "main"), b.GitURL, dir); err != nil {
+		logf(fmt.Sprintf("git clone failed: %v", err))
+		b.BuildStatus = "failed"
+		b.Log += "git clone failed\n"
 		a.store.PutBuild(b)
-		logf("build ready: " + ref)
-		a.hub.Broadcast("build.ready", map[string]any{"build": b.ID, "image": ref})
-		built = true
-		break
+		return
 	}
-	if !built {
-		b.BuildStatus = "building"
-		b.Log += "image build needs a docker daemon or buildkitd on the host; marking build-not-ready\n"
-		logf("image build backend unavailable — clone+dockerfile verified, image push deferred (needs docker or buildkitd)")
-		// Honest intermediate state: the repo is cloned and a Dockerfile is
-		// confirmed, but no image exists yet. Do not claim "ready".
-		b.Image = "git://" + b.GitURL + "#" + orDefault(b.Branch, "main")
+	logf("repository cloned; looking for direct Firecracker artifacts")
+	rootfs := firstExisting(filepath.Join(dir, "rootfs.ext4"), filepath.Join(dir, ".porter", "rootfs.ext4"))
+	kernel := firstExisting(filepath.Join(dir, "vmlinux"), filepath.Join(dir, ".porter", "vmlinux"))
+	if rootfs == "" || kernel == "" {
+		b.BuildStatus = "failed"
+		b.Log += "direct artifact missing: repository must provide rootfs.ext4 and vmlinux at root or .porter/\n"
+		logf("direct artifact missing — no Dockerfile or OCI build fallback is available")
 		a.store.PutBuild(b)
+		return
 	}
+	if a.customImagesDir == "" {
+		b.BuildStatus = "failed"
+		b.Log += "custom image storage is not configured\n"
+		a.store.PutBuild(b)
+		return
+	}
+	name := "git-" + shortBuildRef(b)
+	dest := filepath.Join(a.customImagesDir, name)
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		b.BuildStatus = "failed"
+		b.Log += "create direct image directory failed: " + err.Error() + "\n"
+		a.store.PutBuild(b)
+		return
+	}
+	if err := copyFile(rootfs, filepath.Join(dest, "rootfs.ext4")); err != nil {
+		b.BuildStatus = "failed"
+		b.Log += "copy rootfs failed: " + err.Error() + "\n"
+		a.store.PutBuild(b)
+		return
+	}
+	if err := copyFile(kernel, filepath.Join(dest, "vmlinux")); err != nil {
+		b.BuildStatus = "failed"
+		b.Log += "copy kernel failed: " + err.Error() + "\n"
+		a.store.PutBuild(b)
+		return
+	}
+	gi := &types.GoldenImage{ID: store.NewID(), Name: name, Image: "custom://" + name, Kind: "custom", Rootfs: filepath.Join(dest, "rootfs.ext4"), Kernel: filepath.Join(dest, "vmlinux"), VCPUs: 1, MemMiB: 256, CreatedAt: time.Now()}
+	if err := a.store.PutGoldenImage(gi); err != nil {
+		b.BuildStatus = "failed"
+		b.Log += "save direct image failed: " + err.Error() + "\n"
+		a.store.PutBuild(b)
+		return
+	}
+	b.Image = gi.Image
+	b.BuildStatus = "ready"
+	a.store.PutBuild(b)
+	logf("direct Firecracker image ready: " + gi.Image)
+	a.hub.Broadcast("build.ready", map[string]any{"build": b.ID, "image": gi.Image})
+}
+
+func firstExisting(paths ...string) string {
+	for _, path := range paths {
+		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+			return path
+		}
+	}
+	return ""
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 // shortBuildRef is a stable, short image tag from a build id.
@@ -1873,13 +1901,93 @@ func (a *API) handleCreateBuild(w http.ResponseWriter, r *http.Request) {
 	}
 	b := &types.Build{ID: store.NewID(), ProjectID: a.projectID(r), GitURL: u, Branch: req.Branch, BuildStatus: "building", CreatedAt: time.Now()}
 	a.store.PutBuild(b)
-	a.store.AppendBuildLog(a.projectID(r), fmt.Sprintf("build %s started (git %s@%s) → OCI → microVM", b.ID, req.Branch, u))
+	a.store.AppendBuildLogFor(a.projectID(r), b.ID, fmt.Sprintf("build %s started (GitHub source %s@%s) → direct artifact validation", b.ID, req.Branch, u))
 	go a.runGitBuild(b, r)
 	writeJSON(w, http.StatusAccepted, b)
 }
 
 func (a *API) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"build": r.PathValue("buildId"), "logs": a.store.TailBuildLogs(a.projectID(r), 300)})
+	buildID := r.PathValue("buildId")
+	b, ok := a.store.GetBuild(buildID)
+	if !ok || b.ProjectID != a.projectID(r) {
+		writeError(w, http.StatusNotFound, "build not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"build": buildID, "status": b.BuildStatus, "logs": a.store.TailBuildLogsFor(a.projectID(r), buildID, 300)})
+}
+
+type logStreamPayload struct {
+	Source string   `json:"source"`
+	Lines  []string `json:"lines"`
+	Status string   `json:"status,omitempty"`
+}
+
+// serveLogStream polls the real store rings and emits changed snapshots over
+// SSE. This keeps the transport live without pretending that a static JSON
+// tail is a stream, while the event hub remains available for global events.
+func serveLogStream(w http.ResponseWriter, r *http.Request, snapshot func() logStreamPayload, done func(string) bool) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	last := ""
+	ticker := time.NewTicker(750 * time.Millisecond)
+	defer ticker.Stop()
+	send := func(payload logStreamPayload) bool {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return false
+		}
+		key := string(body)
+		if key == last {
+			return true
+		}
+		last = key
+		_, _ = fmt.Fprintf(w, "event: log\ndata: %s\n\n", body)
+		flusher.Flush()
+		return true
+	}
+
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+	for {
+		payload := snapshot()
+		if !send(payload) {
+			return
+		}
+		if done != nil && done(payload.Status) {
+			_, _ = fmt.Fprint(w, "event: end\ndata: {}\n\n")
+			flusher.Flush()
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *API) handleBuildLogStream(w http.ResponseWriter, r *http.Request) {
+	projectID, buildID := a.projectID(r), r.PathValue("buildId")
+	b, ok := a.store.GetBuild(buildID)
+	if !ok || b.ProjectID != projectID {
+		writeError(w, http.StatusNotFound, "build not found")
+		return
+	}
+	serveLogStream(w, r, func() logStreamPayload {
+		current, found := a.store.GetBuild(buildID)
+		if !found {
+			return logStreamPayload{Source: "build", Status: "missing"}
+		}
+		return logStreamPayload{Source: "build", Lines: a.store.TailBuildLogsFor(projectID, buildID, 300), Status: current.BuildStatus}
+	}, func(status string) bool { return status == "ready" || status == "failed" })
 }
 
 // handleGitBranches lists real remote branches for a project's git URL.
@@ -2087,7 +2195,7 @@ func detectFramework(proj *types.Project) map[string]any {
 	for _, c := range cands {
 		if detect(c.keys...) != "" {
 			return map[string]any{
-				"framework": c.name,
+				"framework":       c.name,
 				"install_command": c.install,
 				"build_command":   c.build,
 				"start_command":   c.start,
@@ -2994,9 +3102,9 @@ func (a *API) handleUsageRequests(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"edge_requests":      reqs,
+		"edge_requests":        reqs,
 		"function_invocations": funcIn,
-		"period":             period,
+		"period":               period,
 	})
 }
 
@@ -3264,9 +3372,38 @@ func (a *API) handleListImages(w http.ResponseWriter, r *http.Request) {
 	}
 	// Merge with persisted golden images.
 	for _, gi := range a.store.ListGoldenImages() {
-		out = append(out, types.ImageManifest{ID: gi.ID, Name: gi.Name, Type: "oci", Description: gi.Description, Image: gi.Image, VCPUs: gi.VCPUs, MemMiB: gi.MemMiB, Ports: gi.Ports, Env: gi.Env, Tags: gi.Tags, Logo: gi.Logo})
+		out = append(out, types.ImageManifest{ID: gi.ID, Name: gi.Name, Type: gi.Kind, Description: gi.Description, Image: gi.Image, Rootfs: gi.Rootfs, Kernel: gi.Kernel, Architecture: gi.Architecture, RootfsSHA256: gi.RootfsSHA256, KernelSHA256: gi.KernelSHA256, Status: gi.Status, VCPUs: gi.VCPUs, MemMiB: gi.MemMiB, Ports: gi.Ports, Env: gi.Env, Tags: gi.Tags, Logo: gi.Logo})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *API) handleBaseImage(w http.ResponseWriter, r *http.Request) {
+	ref := "base://default"
+	if a.hostConfig != nil && a.hostConfig.BaseImageRef != "" {
+		ref = a.hostConfig.BaseImageRef
+	}
+	for _, gi := range a.store.ListGoldenImages() {
+		if gi.Image == ref || gi.Name == strings.TrimPrefix(ref, "base://") {
+			writeJSON(w, http.StatusOK, gi)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "configured base image is not registered")
+}
+
+func (a *API) handleBaseImageReadiness(w http.ResponseWriter, r *http.Request) {
+	ref := "base://default"
+	if a.hostConfig != nil && a.hostConfig.BaseImageRef != "" {
+		ref = a.hostConfig.BaseImageRef
+	}
+	for _, gi := range a.store.ListGoldenImages() {
+		if gi.Image == ref || gi.Name == strings.TrimPrefix(ref, "base://") {
+			report, err := imagecatalog.ValidateArtifacts(gi.Rootfs, gi.Kernel)
+			writeJSON(w, http.StatusOK, map[string]any{"reference": ref, "image": gi, "ready": err == nil, "artifacts": report})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reference": ref, "ready": false, "reason": "configured base image is not registered"})
 }
 
 func (a *API) handleImageSearch(w http.ResponseWriter, r *http.Request) {
@@ -3347,6 +3484,15 @@ func (a *API) handleImageStats(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 // RBAC (roles / permissions CRUD)
 // ---------------------------------------------------------------------------
+func systemRole(roleID string) bool {
+	switch roleID {
+	case "owner", "admin", "member", "viewer", "super_admin":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *API) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.store.ListRoles())
 }
@@ -3378,6 +3524,10 @@ func (a *API) handleCreateRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handlePatchRole(w http.ResponseWriter, r *http.Request) {
+	if systemRole(r.PathValue("roleId")) {
+		writeError(w, http.StatusForbidden, "system roles cannot be edited")
+		return
+	}
 	role, ok := a.store.GetRole(r.PathValue("roleId"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "role not found")
@@ -3402,6 +3552,10 @@ func (a *API) handlePatchRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
+	if systemRole(r.PathValue("roleId")) {
+		writeError(w, http.StatusForbidden, "system roles cannot be deleted")
+		return
+	}
 	if a.store.DeleteRole(r.PathValue("roleId")) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 		return
@@ -3427,6 +3581,10 @@ func (a *API) handleGetRolePermissions(w http.ResponseWriter, r *http.Request) {
 
 // handleSetRolePermissions replaces a role's permission set.
 func (a *API) handleSetRolePermissions(w http.ResponseWriter, r *http.Request) {
+	if systemRole(r.PathValue("roleId")) {
+		writeError(w, http.StatusForbidden, "system role permissions are migration-managed")
+		return
+	}
 	if _, ok := a.store.GetRole(r.PathValue("roleId")); !ok {
 		writeError(w, http.StatusNotFound, "role not found")
 		return
@@ -3449,11 +3607,27 @@ func (a *API) handleSetRolePermissions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleAddRolePermission(w http.ResponseWriter, r *http.Request) {
+	if systemRole(r.PathValue("roleId")) {
+		writeError(w, http.StatusForbidden, "system role permissions are migration-managed")
+		return
+	}
+	if _, ok := a.store.GetRole(r.PathValue("roleId")); !ok {
+		writeError(w, http.StatusNotFound, "role not found")
+		return
+	}
 	a.store.AddRolePermission(r.PathValue("roleId"), r.PathValue("permissionId"))
 	writeJSON(w, http.StatusOK, map[string]any{"status": "granted"})
 }
 
 func (a *API) handleRemoveRolePermission(w http.ResponseWriter, r *http.Request) {
+	if systemRole(r.PathValue("roleId")) {
+		writeError(w, http.StatusForbidden, "system role permissions are migration-managed")
+		return
+	}
+	if _, ok := a.store.GetRole(r.PathValue("roleId")); !ok {
+		writeError(w, http.StatusNotFound, "role not found")
+		return
+	}
 	a.store.RemoveRolePermission(r.PathValue("roleId"), r.PathValue("permissionId"))
 	writeJSON(w, http.StatusOK, map[string]any{"status": "revoked"})
 }
@@ -3590,6 +3764,53 @@ func (a *API) handleHostKernel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, http.StatusNotFound, "vmlinux not found on host; run `porter kernel set <url>` (see deploy/install.sh)")
+}
+
+// handleHostPrerequisites exposes the same direct-Firecracker readiness checks
+// run during `porter server`, without exposing secrets or mutating the host.
+func (a *API) handleHostPrerequisites(w http.ResponseWriter, r *http.Request) {
+	if a.hostConfig == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ready": false, "configured": false, "checks": []startup.Result{},
+		})
+		return
+	}
+	checks := startup.Check(a.hostConfig)
+	ready := true
+	for _, check := range checks {
+		if !check.OK {
+			ready = false
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ready": ready, "configured": true, "checks": checks,
+	})
+}
+
+// handleRuntimeConfig returns the non-secret direct Firecracker settings that
+// operators need when diagnosing image, kernel, socket, or networking issues.
+func (a *API) handleRuntimeConfig(w http.ResponseWriter, r *http.Request) {
+	if a.hostConfig == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"configured": false})
+		return
+	}
+	cfg := a.hostConfig
+	writeJSON(w, http.StatusOK, map[string]any{
+		"configured":        true,
+		"runtime_mode":      cfg.RuntimeMode,
+		"firecracker_bin":   cfg.FirecrackerBin,
+		"jailer_bin":        cfg.JailerBin,
+		"api_socket_dir":    cfg.FirecrackerSocketDir,
+		"kernel_image":      cfg.KernelImage,
+		"rootfs_path":       cfg.RootfsPath,
+		"images_dir":        cfg.ImagesDir,
+		"custom_images_dir": cfg.CustomImagesDir,
+		"logs_dir":          cfg.LogsDir,
+		"gateway_enabled":   cfg.GatewayEnabled,
+		"health_enabled":    cfg.HealthEnabled,
+		"ssh_enabled":       cfg.SSHEnabled,
+	})
 }
 
 func (a *API) handleAllTraffic(w http.ResponseWriter, r *http.Request) {
@@ -3788,6 +4009,26 @@ func (a *API) handleProjectLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"logs": logs, "project_id": proj.ID})
 }
 
+func (a *API) handleProjectLogStream(w http.ResponseWriter, r *http.Request) {
+	projectID := a.projectID(r)
+	if _, ok := a.store.GetProject(projectID); !ok {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	serveLogStream(w, r, func() logStreamPayload {
+		proj, found := a.store.GetProject(projectID)
+		if !found {
+			return logStreamPayload{Source: "project", Status: "missing"}
+		}
+		lines := make([]string, 0, 200)
+		for _, vmID := range proj.VMIDs {
+			lines = append(lines, a.store.TailLogs(vmID, 50)...)
+		}
+		lines = append(lines, a.store.TailBuildLogs(proj.ID, 50)...)
+		return logStreamPayload{Source: "project", Lines: lines, Status: projStatus(proj)}
+	}, nil)
+}
+
 func (a *API) handleProjectMetrics(w http.ResponseWriter, r *http.Request) {
 	proj, ok := a.store.GetProject(a.projectID(r))
 	if !ok {
@@ -3977,23 +4218,26 @@ func (a *API) handleUploadCustomImage(w http.ResponseWriter, r *http.Request) {
 	}
 	rootfs := filepath.Join(dest, "rootfs.ext4")
 	kernel := filepath.Join(dest, "vmlinux")
-	for _, p := range []string{rootfs, kernel} {
-		if st, serr := os.Stat(p); serr != nil || st.IsDir() {
-			writeError(w, http.StatusBadRequest, "zip must contain "+filepath.Base(p))
-			return
-		}
+	report, err := imagecatalog.ValidateArtifacts(rootfs, kernel)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid microVM artifacts: "+report.Error)
+		return
 	}
 
 	gi := &types.GoldenImage{
-		ID:        store.NewID(),
-		Name:      name,
-		Image:     "custom://" + name,
-		Kind:      "custom",
-		Rootfs:    rootfs,
-		Kernel:    kernel,
-		VCPUs:     vcpus,
-		MemMiB:    memMiB,
-		CreatedAt: time.Now(),
+		ID:           store.NewID(),
+		Name:         name,
+		Image:        "custom://" + name,
+		Kind:         "custom",
+		Rootfs:       rootfs,
+		Kernel:       kernel,
+		Architecture: report.Architecture,
+		RootfsSHA256: report.RootfsSHA256,
+		KernelSHA256: report.KernelSHA256,
+		Status:       report.Status,
+		VCPUs:        vcpus,
+		MemMiB:       memMiB,
+		CreatedAt:    time.Now(), ValidatedAt: func() *time.Time { now := time.Now(); return &now }(),
 	}
 	if err := a.store.PutGoldenImage(gi); err != nil {
 		writeError(w, http.StatusInternalServerError, "save image: "+err.Error())

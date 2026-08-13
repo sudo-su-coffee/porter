@@ -29,7 +29,12 @@ const showScale = ref(false);
 const showDomain = ref(false);
 const newEnv = ref({ key: "", value: "" });
 
-const TABS = ["overview", "deployments", "analytics", "traffic", "logs", "domains", "environment", "secrets", "crons", "firewall", "settings"];
+const TABS = ["overview", "deployments", "builds", "analytics", "traffic", "logs", "domains", "environment", "secrets", "crons", "firewall", "settings"];
+
+const runningReplicas = computed(() => vms.value.filter((v) => v.state === "running").length);
+const healthyReplicas = computed(() => vms.value.filter((v) => v.health_status === "healthy").length);
+const latestDeployment = computed(() => deployments.value[0] || null);
+const directImage = computed(() => project.value?.image || latestDeployment.value?.image || "—");
 
 async function load() {
   error.value = "";
@@ -145,6 +150,13 @@ onUnmounted(() => disconnectEvents());
       </div>
     </div>
 
+    <section class="project-surface">
+      <div class="surface-stat surface-stat-wide"><span class="stat-label">Direct image</span><strong class="mono">{{ directImage }}</strong><span class="hint">kernel + rootfs selected by the control plane</span></div>
+      <div class="surface-stat"><span class="stat-label">Replica pool</span><strong>{{ runningReplicas }}/{{ vms.length }}</strong><span class="hint">running now</span></div>
+      <div class="surface-stat"><span class="stat-label">Health</span><strong :class="healthyReplicas === vms.length && vms.length ? 'surface-good' : 'surface-warn'">{{ healthyReplicas }}/{{ vms.length }}</strong><span class="hint">healthy replicas</span></div>
+      <div class="surface-stat"><span class="stat-label">Latest release</span><strong>#{{ latestDeployment?.revision ?? '—' }}</strong><span class="hint">{{ latestDeployment?.build_status || 'no deployment yet' }}</span></div>
+    </section>
+
     <div class="seg" style="margin-bottom:18px">
       <button v-for="t in TABS" :key="t" :class="{ active: tab === t }" @click="tab = t">{{ t }}</button>
     </div>
@@ -189,7 +201,7 @@ onUnmounted(() => disconnectEvents());
           <thead><tr><th>Revision</th><th>Status</th><th>Image</th><th>Rollout</th><th>Created</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody>
             <tr v-for="d in deployments" :key="d.id">
-              <td class="num">#{{ d.revision ?? d.id.slice(0, 8) }}</td>
+              <td><a class="back-link" @click="router.push({ name: 'deployment', params: { projectId: id, deploymentId: d.id } })">#{{ d.revision ?? d.id.slice(0, 8) }}</a></td>
               <td><StatusBadge :state="d.build_status || 'ready'" /></td>
               <td class="mono">{{ d.image_digest || d.image || '—' }}</td>
               <td class="num">{{ d.rollout_percent != null ? d.rollout_percent + '%' : '—' }}</td>
@@ -205,6 +217,13 @@ onUnmounted(() => disconnectEvents());
           </tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Builds -->
+    <div v-if="tab === 'builds'" class="card">
+      <div class="card-title">Source builds</div>
+      <div class="page-sub">Inspect GitHub provenance, direct artifact validation, and live build output in the dedicated build workspace.</div>
+      <button class="btn btn-primary" @click="router.push({ name: 'project-builds', params: { projectId: id } })">Open build workspace</button>
     </div>
 
     <!-- Analytics -->

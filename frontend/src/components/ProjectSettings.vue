@@ -7,15 +7,16 @@ const props = defineProps({ projectId: { type: String, required: true } });
 const tab = ref("general");
 const error = ref("");
 
-const TABS = ["general", "build", "git", "security", "rollout"];
+const TABS = ["general", "build", "git", "functions", "security", "rollout"];
 
 const general = ref({});
 const build = ref({});
 const git = ref({});
+const functions = ref({});
 const security = ref({});
 const rollout = ref({});
-const sections = { general, build, git, security, rollout };
-const SAVE_VERB = { general: "PATCH", build: "PUT", git: "PUT", security: "PUT", rollout: "PUT" };
+const sections = { general, build, git, functions, security, rollout };
+const SAVE_VERB = { general: "PATCH", build: "PUT", git: "PUT", functions: "PUT", security: "PUT", rollout: "PUT" };
 
 async function loadSection(name) {
   error.value = "";
@@ -105,6 +106,27 @@ onMounted(() => loadSection("general"));
         <label class="toggle"><input type="checkbox" v-model="git.auto_deploy" /><span></span></label>
       </div>
       <div class="modal-footer"><button class="btn btn-primary" @click="save('git')">Save</button></div>
+    </div>
+  </template>
+
+  <template v-else-if="tab === 'functions'">
+    <div class="card">
+      <div class="card-head"><div class="card-title">Serverless workload metadata</div><span class="tag tag-amber">direct guest boundary</span></div>
+      <p class="page-sub" style="margin-bottom:16px">Use this page to record function routing and resource intent. Porter does not claim arbitrary Lambda-style execution until a guest-vsock agent and an artifact build pipeline are installed.</p>
+      <div class="field"><label>Enable function routes</label><label class="toggle"><input type="checkbox" v-model="functions.enabled" /><span></span></label></div>
+      <div class="field-row">
+        <div class="field"><label>Runtime label</label><input v-model="functions.runtime" placeholder="linux-microvm" /></div>
+        <div class="field"><label>Entrypoint</label><input v-model="functions.entrypoint" placeholder="/app/server" /></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Memory (MiB)</label><input v-model.number="functions.memory_mib" type="number" min="64" /></div>
+        <div class="field"><label>Timeout (ms)</label><input v-model.number="functions.timeout_ms" type="number" min="1" /></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Concurrency</label><input v-model.number="functions.concurrency" type="number" min="1" /></div>
+        <div class="field"><label>Route prefix</label><input v-model="functions.route_prefix" placeholder="/api" /></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" @click="save('functions')">Save functions settings</button></div>
     </div>
   </template>
 

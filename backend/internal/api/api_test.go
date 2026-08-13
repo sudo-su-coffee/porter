@@ -9,7 +9,7 @@ import (
 // TestRoutesRegistersPaths ensures Routes() wires every handler without
 // panicking. A nil store is safe here: handlers never run, only registration.
 func TestRoutesRegistersPaths(t *testing.T) {
-	a := NewAPI(nil, nil, nil, nil, nil, "tok", "example.com", "admin", "pw", "v0.1.0")
+	a := NewAPI(nil, nil, nil, nil, nil, "secret-material", "example.com", "v1.0.0-beta-dev")
 	mux := http.NewServeMux()
 	a.Routes(mux)
 

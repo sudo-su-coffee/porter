@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// TestCurrentPrincipalDefaultsToAdmin verifies unauthenticated context resolves
-// to the bootstrap admin (the defensive default).
-func TestCurrentPrincipalDefaultsToAdmin(t *testing.T) {
+// TestCurrentPrincipalHasNoFallback verifies unauthenticated context cannot
+// resolve to any privileged principal.
+func TestCurrentPrincipalHasNoFallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/projects/x", nil)
 	p := currentPrincipal(req)
-	if !p.isAdmin || p.role != "admin" {
-		t.Fatalf("expected admin default, got %+v", p)
+	if p.username != "" || p.role != "" {
+		t.Fatalf("expected empty principal, got %+v", p)
 	}
 }
 
@@ -35,6 +35,17 @@ func TestPermForRoute(t *testing.T) {
 		{"GET /projects/{projectId}/analytics/bandwidth", "analytics.read"},
 		{"POST /orgs/transfer", "org.transfer"},
 		{"DELETE /orgs/members/{username}", "org.member.remove"},
+		{"GET /org", "project.read"},
+		{"PATCH /org", "org.settings"},
+		{"GET /projects/{projectId}/environments/{envId}/range", "project.read"},
+		{"GET /replicas", "replica.list"},
+		{"GET /replicas/{replicaId}", "replica.list"},
+		{"GET /host/prerequisites", "metric.read"},
+		{"GET /host/runtime", "metric.read"},
+		{"GET /vms/{replicaId}/logs", "log.read"},
+		{"GET /vms/{replicaId}/health", "replica.list"},
+		{"GET /vms/{replicaId}/ssh-info", "ssh.connect"},
+		{"POST /vms/{replicaId}/exec", "replica.exec"},
 		{"POST /users", "user.create"},
 		{"DELETE /servers/{id}", "server.remove"},
 	}

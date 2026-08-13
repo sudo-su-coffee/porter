@@ -14,9 +14,11 @@ const vm = ref(null);
 const traffic = ref([]);
 const logs = ref([]);
 const sshInfo = ref(null);
+const health = ref(null);
+const metrics = ref([]);
 const error = ref("");
 const tab = ref(route.query.tab || "overview");
-const TABS = ["overview", "logs", "traffic", "ssh"];
+const TABS = ["overview", "health", "metrics", "logs", "traffic", "ssh"];
 
 const healthy = computed(() => vm.value?.health_status === "healthy");
 
@@ -24,7 +26,7 @@ async function load() {
   error.value = "";
   try {
     vm.value = await api(`/vms/${props.id}`);
-    await Promise.allSettled([loadLogs(), loadTraffic(), loadSSH()]);
+    await Promise.allSettled([loadHealth(), loadMetrics(), loadLogs(), loadTraffic(), loadSSH()]);
   } catch (e) {
     error.value = e.message;
   }
@@ -38,6 +40,13 @@ async function loadTraffic() {
 }
 async function loadSSH() {
   sshInfo.value = await api(`/vms/${props.id}/ssh-info`);
+}
+async function loadHealth() {
+  health.value = await api(`/vms/${props.id}/health`);
+}
+async function loadMetrics() {
+  const result = await api(`/vms/${props.id}/metrics`);
+  metrics.value = Array.isArray(result) ? result : result?.metrics || [];
 }
 
 async function act(kind) {
@@ -108,6 +117,27 @@ onUnmounted(() => disconnectEvents());
           <tr v-if="sshInfo"><td class="hint">SSH</td><td class="mono">{{ sshInfo.user }}@{{ sshInfo.host }}:{{ sshInfo.port }}</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <div v-if="tab === 'health'" class="card">
+      <div class="card-head"><div class="card-title">Replica health</div><HealthPill :health="health?.health || vm.health_status" /></div>
+      <div class="runtime-check-list">
+        <div class="runtime-check-row"><span class="runtime-check-icon" :class="health?.running ? 'check-ok' : 'check-fail'">{{ health?.running ? '✓' : '!' }}</span><div><div class="runtime-check-name">Runtime state</div><div class="hint">{{ health?.state || vm.state || 'unknown' }}</div></div></div>
+        <div class="runtime-check-row"><span class="runtime-check-icon" :class="health?.error ? 'check-fail' : 'check-ok'">{{ health?.error ? '!' : '✓' }}</span><div><div class="runtime-check-name">Last health detail</div><div class="hint">{{ health?.error || 'No current health error reported.' }}</div></div></div>
+      </div>
+    </div>
+
+    <div v-if="tab === 'metrics'">
+      <div class="logs-header"><span class="page-sub mono">last {{ metrics.length }} samples</span><button class="btn btn-sm" @click="loadMetrics">Refresh</button></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Metric</th><th>Value</th><th>Observed</th></tr></thead>
+          <tbody>
+            <tr v-for="m in metrics" :key="m.id || `${m.metric}-${m.ts}`"><td class="mono">{{ m.metric }}</td><td class="num">{{ Number(m.value).toFixed(3) }}</td><td class="num muted">{{ m.ts ? new Date(m.ts).toLocaleString() : '—' }}</td></tr>
+            <tr v-if="!metrics.length"><td colspan="3" class="hint" style="text-align:center; padding:18px">No metric samples recorded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div v-if="tab === 'logs'">

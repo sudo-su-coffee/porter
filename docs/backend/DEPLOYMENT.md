@@ -5,6 +5,7 @@ The Backend workstream keeps its operational scripts in one group:
 ```
 scripts/backend/
 ├── install.sh             production install (Linux + KVM, run as root)
+├── install-linux.sh       source-tree Linux daemon installer with embedded Vue dashboard
 ├── dev.sh                 local dev (Docker for Postgres, real microVM boots)
 ├── install-firecracker.sh checksum-pinned Firecracker helper
 ├── install-porter.sh      verified GitHub Release installer
@@ -27,6 +28,39 @@ bash scripts/backend/dev.sh clean     # down + remove ./bin
 - Dashboard: http://localhost:8080. The initial database-seeded account is
   initialized with `PORTER_BOOTSTRAP_ADMIN_PASSWORD`.
 
+## Linux beta (single Linux + KVM host)
+
+For a source checkout, use the daemon installer as root:
+
+```bash
+sudo PORTER_BASE_IMAGE_DIR=/var/porter/base-images/default \
+  bash scripts/backend/install-linux.sh
+```
+
+The installer builds `frontend/` first, writes the result to `backend/web/dist`,
+compiles the Go daemon so those assets are embedded through `backend/embed.go`,
+installs the checksum-pinned official Firecracker binary from GitHub, creates a
+`porter` system user, installs `release/porter.service`, and enables the daemon.
+It refuses to claim a working microVM runtime unless the configured directory
+contains real, non-empty `vmlinux` and `rootfs.ext4` artifacts. For control-plane
+development only, `PORTER_ALLOW_MISSING_BASE_IMAGE=1` can bypass that refusal;
+replicas will not boot in that mode.
+
+After installation, the dashboard is served by the same Go process at
+`http://127.0.0.1:8080` by default. The database-seeded super-admin username is
+`admin`. The installer generates a random bootstrap password on first install,
+stores it in `/var/porter/porter.env` with root ownership and daemon-group-only
+read access, and prints it once at the end. The editable runtime configuration
+is `/var/porter/porter.toml`; it contains paths and non-secret settings, while
+database credentials and key material remain in the protected environment file.
+There is **no reusable default password in the repository**. Rotate it after
+the first login.
+
+```bash
+systemctl status porter.service
+journalctl -u porter.service -f
+```
+
 ## Prod (single Linux + KVM host)
 
 ```bash
@@ -42,12 +76,25 @@ Go daemon, and writes direct-runtime configuration. Config lands in the local
 installer state directory; credentials are supplied through
 `PORTER_BOOTSTRAP_ADMIN_PASSWORD` and `PORTER_SECRET_KEY`, never TOML.
 
-For a compiled release, run `scripts/backend/build-release.sh` with
+For a compiled GitHub release, run `scripts/backend/build-release.sh` with
 `PORTER_BASE_IMAGE_DIR` pointing to a directory containing real `vmlinux` and
-`rootfs.ext4`. It creates a daemon package and a separate base-image package.
+`rootfs.ext4`. The builder first compiles the Vue dashboard and embeds it in the
+Linux Go binary, then creates a daemon package and a separate base-image package.
 Upload both assets to the Porter GitHub Release, then install with
 `scripts/backend/install-porter.sh` and a mandatory `PORTER_RELEASE_PACKAGE_SHA256`. No AWS
 bucket or arbitrary mirror is used.
+
+The current development sandbox does not expose `/dev/kvm` and does not contain
+a user-supplied `vmlinux`/`rootfs.ext4` pair, so it can validate compilation,
+embedding, checksums, scripts, and package structure but cannot honestly perform
+a privileged Firecracker boot smoke test or produce a complete bootable guest
+release without those real artifacts.
+
+PostgreSQL stores Porter’s control-plane state. The Linux installer asks whether
+to use PostgreSQL on the same host or a remote operator-managed PostgreSQL
+service; it does not use Docker for the Linux installation and does not place
+the database in a Firecracker guest. `/var/porter` contains the editable TOML,
+protected environment file, image/artifact state, and local volume backing data.
 
 ## Where does PostgreSQL run in production?
 

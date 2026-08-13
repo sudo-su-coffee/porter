@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$REPO_DIR/backend"
+FRONTEND_DIR="$REPO_DIR/frontend"
 REPOSITORY="${PORTER_GITHUB_REPOSITORY:-sudo-su-coffee/porter}"
 RELEASE_TAG="${1:-${PORTER_RELEASE_TAG:-v1.0.0-beta-dev}}"
 ARCH="${2:-$(uname -m)}"
@@ -24,11 +25,24 @@ esac
 [ -f "$BASE_IMAGE_DIR/vmlinux" ] && [ -s "$BASE_IMAGE_DIR/vmlinux" ] || { echo "missing non-empty $BASE_IMAGE_DIR/vmlinux" >&2; exit 2; }
 [ -f "$BASE_IMAGE_DIR/rootfs.ext4" ] && [ -s "$BASE_IMAGE_DIR/rootfs.ext4" ] || { echo "missing non-empty $BASE_IMAGE_DIR/rootfs.ext4" >&2; exit 2; }
 
+command -v npm >/dev/null 2>&1 || { echo "npm is required to build and embed the Vue dashboard" >&2; exit 2; }
+if [ -f "$FRONTEND_DIR/package-lock.json" ]; then
+  (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund)
+else
+  (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund)
+fi
+(cd "$FRONTEND_DIR" && npm run build)
+[ -s "$BACKEND_DIR/web/dist/index.html" ] || { echo "Vue build did not produce backend/web/dist/index.html" >&2; exit 2; }
+
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/base-images/default" "$DIST_DIR/release"
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go -C "$BACKEND_DIR" build -trimpath -ldflags "-s -w -X main.Version=$RELEASE_TAG" -o "$DIST_DIR/porter" ./cmd/porter
 install -m 0755 "$REPO_DIR/scripts/backend/install-porter.sh" "$DIST_DIR/install-porter.sh"
 install -m 0755 "$REPO_DIR/scripts/backend/install-firecracker.sh" "$DIST_DIR/install-firecracker.sh"
+install -m 0755 "$REPO_DIR/scripts/backend/postgres.sh" "$DIST_DIR/postgres.sh"
+install -m 0755 "$REPO_DIR/scripts/backend/install-linux.sh" "$DIST_DIR/install-linux.sh"
+install -m 0644 "$REPO_DIR/release/porter.service" "$DIST_DIR/porter.service"
+install -m 0644 "$REPO_DIR/release/porter.env.example" "$DIST_DIR/porter.env.example"
 install -m 0644 "$REPO_DIR/docs/backend/FIRECRACKER_ARTIFACTS.md" "$DIST_DIR/FIRECRACKER_ARTIFACTS.md"
 install -m 0644 "$REPO_DIR/release/firecracker-versions.json" "$DIST_DIR/release/firecracker-versions.json"
 install -m 0644 "$BASE_IMAGE_DIR/vmlinux" "$DIST_DIR/base-images/default/vmlinux"
@@ -46,7 +60,7 @@ cat > "$DIST_DIR/release/porter-release-manifest.json" <<EOF
   "release_tag": "$RELEASE_TAG",
   "architecture": "$ARCH",
   "distribution": "github-release-only",
-  "daemon": {"asset": "porter", "sha256": "$DAEMON_SHA256"},
+  "daemon": {"asset": "porter", "sha256": "$DAEMON_SHA256", "dashboard": "embedded:backend/web/dist"},
   "base_image": {
     "reference": "base://default",
     "kernel_asset": "base-images/default/vmlinux",
@@ -59,7 +73,7 @@ cat > "$DIST_DIR/release/porter-release-manifest.json" <<EOF
 EOF
 (cd "$DIST_DIR" && sha256sum porter base-images/default/vmlinux base-images/default/rootfs.ext4 release/porter-release-manifest.json > release/SHA256SUMS)
 tar -C "$DIST_DIR" -czf "$DIST_DIR/../$BASE_PACKAGE" base-images/default/vmlinux base-images/default/rootfs.ext4
-tar -C "$DIST_DIR" -czf "$DIST_DIR/../$PACKAGE" porter install-porter.sh install-firecracker.sh FIRECRACKER_ARTIFACTS.md base-images release
+tar -C "$DIST_DIR" -czf "$DIST_DIR/../$PACKAGE" porter install-porter.sh install-firecracker.sh postgres.sh install-linux.sh porter.service porter.env.example FIRECRACKER_ARTIFACTS.md base-images release
 PACKAGE_SHA256="$(sha256sum "$DIST_DIR/../$PACKAGE" | awk '{print $1}')"
 BASE_PACKAGE_SHA256="$(sha256sum "$DIST_DIR/../$BASE_PACKAGE" | awk '{print $1}')"
 printf '%s\n' "Built $DIST_DIR/../$PACKAGE" "Package SHA-256: $PACKAGE_SHA256" "Built $DIST_DIR/../$BASE_PACKAGE" "Base package SHA-256: $BASE_PACKAGE_SHA256" "Upload both files to GitHub Releases for $REPOSITORY/$RELEASE_TAG; no upload is performed by this script."

@@ -29,7 +29,7 @@ inputs in future workflows, but they are never the isolation or boot boundary.
 | Seeded `super_admin` | **DONE** | migration `0015_seed_super_admin`; all catalog permissions and owner membership |
 | Project and replica control | **DONE** | create, scale, start, stop, restart, delete, health, rollout, rollback |
 | Domains, traffic, analytics, and observability | **DONE** | real handlers, persisted metadata, rings, metrics, and SSE streams |
-| Vue operator workspace | **DONE** | 57 route entries, projects, PaaS resources, host views, logs, and access management |
+| Vue operator workspace | **DONE** | 31 real view components, 116 route declarations, projects, PaaS resources, host views, logs, and access management |
 | Authenticated build-log streaming | **DONE** | project, replica, and build-scoped SSE routes |
 | Persistent volume guest attachment | **PARTIAL** | host directory and sparse image lifecycle exist; boot attachment needs final host smoke test |
 | Interactive guest SSH/exec | **PARTIAL** | SSH information and contracts exist; direct guest-vsock agent is not yet enabled |
@@ -45,7 +45,7 @@ GitHub Release assets
   └── Porter base bundle (vmlinux + rootfs.ext4, pinned digest)
                 │
                 ▼
-Linux host installer → /var/lib/porter + /run/porter/firecracker
+Linux host installer → /var/porter + /run/porter/firecracker
                 │
                 ▼
 Porter Go API → PostgreSQL + direct runtime → Firecracker Unix sockets

@@ -17,7 +17,7 @@ The repository also keeps shared automation under `scripts/backend/` and `script
 
 ## Current beta-dev scope
 
-The dashboard exposes **39 canonical PaaS product surfaces**, implemented through **25 genuine Vue view components** and **78 route declarations**. The count is intentionally not 39 files: detail pages, live streams, settings sections, and schema-driven resources use real dedicated or shared implementations rather than one-line wrappers.
+The dashboard exposes **39 canonical PaaS product surfaces**, implemented through **31 genuine Vue view components**, **116 route declarations**, and **40 schema-driven resource routes**. The count is intentionally not 39 files: detail pages, live streams, settings sections, and schema-driven resources use real dedicated or shared implementations rather than one-line wrappers.
 
 The dashboard covers projects, deployments, builds, direct source and Compose boundaries, replicas, health, metrics, logs, traffic, images, domains, volumes, networks, hooks, cron, alerts, firewall, settings, analytics, servers, host readiness, organizations, teams, users, roles, permissions, audit/events, and API keys. The API-to-Vue audit is recorded in [`docs/backend/PAGE_API_MATRIX.md`](docs/backend/PAGE_API_MATRIX.md), with the latest gap closure in [`docs/backend/PAGE_API_GAP_AUDIT.md`](docs/backend/PAGE_API_GAP_AUDIT.md).
 
@@ -45,14 +45,21 @@ make frontend
 # 2. Run backend checks.
 make test
 
-# 3. Run backend development with Docker-backed PostgreSQL.
+# 3. Run backend development with Docker-backed PostgreSQL only for local development.
 bash scripts/backend/dev.sh up
 
-# 4. Install a host for direct runtime operation.
+# 4. Install a Linux host for direct runtime operation; the installer asks
+#    whether PostgreSQL should be local on this host or operator-managed remote.
 sudo -E bash scripts/backend/install.sh
 ```
 
-Set `PORTER_DATABASE_URL`, `PORTER_BOOTSTRAP_ADMIN_PASSWORD`, and a protected `PORTER_SECRET_KEY` as appropriate for the environment. Authorization is database-seeded RBAC only; the bootstrap password initializes the persisted account and is not an authorization bypass.
+The Linux installer does not use Docker. It offers local host PostgreSQL (with
+optional Debian/Ubuntu package installation using `PORTER_INSTALL_SYSTEM_DEPS=1`)
+or a verified remote `PORTER_DATABASE_URL`. The editable non-secret runtime
+configuration is `/var/porter/porter.toml`; database credentials and key material
+are kept in `/var/porter/porter.env`. Authorization is database-seeded RBAC only;
+the bootstrap password initializes the persisted account and is not an
+authorization bypass.
 
 ## Validation
 

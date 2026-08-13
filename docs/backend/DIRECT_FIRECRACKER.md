@@ -7,8 +7,8 @@ The Porter backend now uses the official Firecracker process directly. One VMM p
 Every deployable image must resolve to two host files:
 
 ```text
-/var/lib/porter/vmlinux
-/var/lib/porter/rootfs.ext4
+/var/porter/base-images/default/vmlinux
+/var/porter/base-images/default/rootfs.ext4
 ```
 
 The custom-image upload endpoint accepts a ZIP containing `vmlinux` and `rootfs.ext4`. Git deployments accept the same pair at the repository root or under `.porter/`; the backend copies them into `custom_images_dir` and registers a `custom://...` golden image. Dockerfiles, registry references, and source-only repositories are not converted automatically.
@@ -22,8 +22,8 @@ The direct runtime is configured in `porter.toml` or with environment overrides:
 runtime_mode = "direct"
 api_socket_dir = "/run/porter/firecracker"
 firecracker_bin = "firecracker"
-kernel_image = "/var/lib/porter/vmlinux"
-rootfs_path = "/var/lib/porter/rootfs.ext4"
+kernel_image = "/var/porter/base-images/default/vmlinux"
+rootfs_path = "/var/porter/base-images/default/rootfs.ext4"
 logs_dir = "/var/log/porter"
 custom_images_dir = "vms/custom"
 ```

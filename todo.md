@@ -47,3 +47,22 @@
 - [x] Create one clean consolidated branch from `feat/direct-firecracker-beta-dev` containing the complete validated stack.
 - [x] Open one final PR against `feat/direct-firecracker-beta-dev` with a thorough merge checklist and no automatic merge.
 - [x] Rerun all backend, frontend, route, RBAC, source-structure, shell, and ZIP integrity checks on the consolidated branch.
+
+## Linux v1.0.0-beta release packaging
+
+- [ ] Reconcile PR #11 and create the Linux release branch from the approved backend baseline.
+- [ ] Verify the Vue dashboard is embedded into the Go binary through the backend web asset pipeline.
+- [ ] Add or verify a systemd service and installer that compile/install the Go daemon with least-privilege filesystem ownership.
+- [ ] Add or verify official GitHub-only Firecracker installation with version pinning and SHA-256 verification.
+- [ ] Verify real `vmlinux` and `rootfs.ext4` artifact configuration without OCI/containerd boot claims.
+- [ ] Verify database-seeded super-admin bootstrap without committing or printing a reusable default password.
+- [ ] Run Linux installer dry-runs, Go tests/vet, embedded-asset checks, and release archive integrity checks.
+- [ ] Create one GitHub release PR and document the dashboard URL, first-run credential setup, and remaining operator-host checks.
+
+## API, configuration, and PostgreSQL deployment review
+
+- [ ] Re-run the 311-route API-to-handler/RBAC/Vue coverage audit after the interrupted Linux release edits.
+- [ ] Decide and document the canonical editable TOML path under `/var/lib/porter`, while keeping secrets in a protected environment file.
+- [ ] Make the installer explicitly choose local host PostgreSQL, an operator-managed remote PostgreSQL URL, or a documented external database setup; do not use Docker in the Linux installer.
+- [ ] Add non-Docker PostgreSQL checks/installation guidance without pretending the sandbox can prove a real production database connection.
+- [ ] Verify systemd, embedded dashboard, direct Firecracker paths, real guest artifacts, and data-directory ownership against the chosen configuration layout.

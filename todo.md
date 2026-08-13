@@ -44,6 +44,6 @@
 
 - [x] Repair the method-aware audit script and generate its endpoint-to-source report.
 - [x] Review every unmatched product route and fix any missing Vue caller, method, payload, or navigation path.
-- [ ] Create one clean consolidated branch from `feat/direct-firecracker-beta-dev` containing the complete validated stack.
-- [ ] Open one final PR against `feat/direct-firecracker-beta-dev` with a thorough merge checklist and no automatic merge.
+- [x] Create one clean consolidated branch from `feat/direct-firecracker-beta-dev` containing the complete validated stack.
+- [x] Open one final PR against `feat/direct-firecracker-beta-dev` with a thorough merge checklist and no automatic merge.
 - [x] Rerun all backend, frontend, route, RBAC, source-structure, shell, and ZIP integrity checks on the consolidated branch.

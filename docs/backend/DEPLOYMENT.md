@@ -43,6 +43,12 @@ or set `PORTER_RELEASE_PACKAGE_SHA256` explicitly when the checksum sidecar is
 not reachable. The release must include a real base-image bundle; the installer
 will not fabricate one.
 
+To create those release assets, use the repository’s **Actions → Porter Linux
+release** workflow. Supply a pre-published GitHub Release URL for a real
+`vmlinux`/`rootfs.ext4` bundle and its SHA-256 digest, or configure
+`PORTER_BASE_IMAGE_URL` and `PORTER_BASE_IMAGE_SHA256` repository secrets before
+pushing a `v*` tag. The workflow intentionally fails when that input is absent.
+
 For a source checkout, use the daemon installer as root:
 
 ```bash

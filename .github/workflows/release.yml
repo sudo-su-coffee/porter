@@ -1,14 +1,39 @@
-name: Release
+name: Porter Linux release
 
-# Porter is Firecracker/KVM-based, so only Linux targets make sense —
-# there is no macOS/Windows build here on purpose.
-#
-# Triggers on any tag matching v0.1.0, v0.1.0-beta, v1.0.0, etc.
-# Push a tag to cut a release:
-#   git tag v0.1.0-beta
-#   git push origin v0.1.0-beta
+# A release needs a real compatible vmlinux + rootfs.ext4 bundle. The workflow
+# accepts that bundle through manual inputs or repository secrets; it never
+# fabricates a guest image and never treats an OCI image as a Firecracker boot
+# artifact.
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "GitHub Release tag to create"
+        required: true
+        default: "v1.0.0-beta-dev"
+        type: string
+      architecture:
+        description: "Linux architecture to build"
+        required: true
+        default: "x86_64"
+        type: choice
+        options:
+          - x86_64
+          - aarch64
+      base_image_url:
+        description: "GitHub Release URL for a real vmlinux + rootfs.ext4 bundle"
+        required: true
+        type: string
+      base_image_sha256:
+        description: "SHA-256 digest of that base-image bundle"
+        required: true
+        type: string
+      prerelease:
+        description: "Publish as a prerelease"
+        required: true
+        default: true
+        type: boolean
   push:
     tags:
       - "v*"
@@ -16,95 +41,100 @@ on:
 permissions:
   contents: write
 
-jobs:
-  build:
-    name: Build (${{ matrix.goarch }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goarch: [amd64, arm64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+concurrency:
+  group: porter-release-${{ github.event_name }}-${{ inputs.release_tag || github.ref_name }}-${{ inputs.architecture || 'x86_64' }}
+  cancel-in-progress: false
 
-      - name: Set up Node
+jobs:
+  release:
+    name: Build Porter Linux release
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      ARCH: ${{ inputs.architecture || 'x86_64' }}
+      BASE_IMAGE_URL: ${{ inputs.base_image_url || secrets.PORTER_BASE_IMAGE_URL }}
+      BASE_IMAGE_SHA256: ${{ inputs.base_image_sha256 || secrets.PORTER_BASE_IMAGE_SHA256 }}
+      REPOSITORY: ${{ github.repository }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
+          node-version: "22"
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Build frontend (Vue dashboard)
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
 
-      - name: Derive version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Build
-        working-directory: backend
-        env:
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+      - name: Download and verify real guest artifacts
+        shell: bash
         run: |
-          mkdir -p dist
-          go build \
-            -trimpath \
-            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }}" \
-            -o dist/porter-linux-${{ matrix.goarch }} \
-            .
+          set -euo pipefail
+          [ -n "$BASE_IMAGE_URL" ] || { echo "Provide base_image_url or PORTER_BASE_IMAGE_URL" >&2; exit 1; }
+          [ -n "$BASE_IMAGE_SHA256" ] || { echo "Provide base_image_sha256 or PORTER_BASE_IMAGE_SHA256" >&2; exit 1; }
+          case "$BASE_IMAGE_URL" in
+            https://github.com/*/releases/download/*) ;;
+            *) echo "base image URL must be a GitHub Release download URL" >&2; exit 1 ;;
+          esac
+          case "$BASE_IMAGE_SHA256" in
+            ''|*[!0-9a-fA-F]*) echo "base image SHA-256 must be hexadecimal" >&2; exit 1 ;;
+          esac
+          [ "${#BASE_IMAGE_SHA256}" -eq 64 ] || { echo "base image SHA-256 must contain 64 hex characters" >&2; exit 1; }
+          work="${RUNNER_TEMP}/porter-base-image"
+          mkdir -p "$work/unpacked" "$GITHUB_WORKSPACE/release-inputs/base-image"
+          archive="$work/base-image"
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 900 -o "$archive" "$BASE_IMAGE_URL"
+          printf '%s  %s\n' "$BASE_IMAGE_SHA256" "$archive" | sha256sum -c -
+          case "$BASE_IMAGE_URL" in
+            *.zip|*.zip\?*) unzip -q "$archive" -d "$work/unpacked" ;;
+            *) tar --extract --file "$archive" --directory "$work/unpacked" --no-same-owner --no-same-permissions ;;
+          esac
+          kernel="$(find "$work/unpacked" -type f -name vmlinux -print -quit)"
+          rootfs="$(find "$work/unpacked" -type f -name rootfs.ext4 -print -quit)"
+          [ -n "$kernel" ] && [ -n "$rootfs" ] || { echo "base bundle must contain real vmlinux and rootfs.ext4" >&2; exit 1; }
+          install -m 0644 "$kernel" "$GITHUB_WORKSPACE/release-inputs/base-image/vmlinux"
+          install -m 0644 "$rootfs" "$GITHUB_WORKSPACE/release-inputs/base-image/rootfs.ext4"
 
-      - name: Checksum
-        working-directory: backend/dist
-        run: sha256sum porter-linux-${{ matrix.goarch }} > porter-linux-${{ matrix.goarch }}.sha256
+      - name: Build Vue dashboard and Go release archives
+        shell: bash
+        env:
+          PORTER_BASE_IMAGE_DIR: ${{ github.workspace }}/release-inputs/base-image
+          PORTER_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/backend/build-release.sh "$RELEASE_TAG" "$ARCH"
+          dist="${GITHUB_WORKSPACE}/release-dist/${RELEASE_TAG}"
+          package="${dist}/porter-${RELEASE_TAG}-${ARCH}.tar.gz"
+          base_package="${dist}/porter-base-image-${RELEASE_TAG}-${ARCH}.tar.gz"
+          test -s "$package"
+          test -s "$base_package"
+          sha256sum -c "${package}.sha256"
+          sha256sum -c "${base_package}.sha256"
+          tar -tzf "$package" | grep -Fx 'porter'
+          tar -tzf "$package" | grep -Fx 'install-porter.sh'
+          tar -tzf "$package" | grep -Fx 'postgres.sh'
+          tar -tzf "$package" | grep -Fx 'porter.service'
+          tar -tzf "$base_package" | grep -Fx 'base-images/default/vmlinux'
+          tar -tzf "$base_package" | grep -Fx 'base-images/default/rootfs.ext4'
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: porter-linux-${{ matrix.goarch }}
-          path: |
-            backend/dist/porter-linux-${{ matrix.goarch }}
-            backend/dist/porter-linux-${{ matrix.goarch }}.sha256
-          if-no-files-found: error
-
-  release:
-    name: Publish release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: List staged release files
-        run: ls -lh artifacts
-
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Porter ${{ github.ref_name }}
-          # Marks the release as a pre-release automatically for any
-          # tag containing a pre-release suffix (e.g. v0.1.0-beta,
-          # v0.2.0-rc1). Stable tags like v1.0.0 publish as a normal
-          # release.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Porter ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ inputs.prerelease || contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
-            artifacts/porter-linux-amd64
-            artifacts/porter-linux-amd64.sha256
-            artifacts/porter-linux-arm64
-            artifacts/porter-linux-arm64.sha256
+            release-dist/${{ env.RELEASE_TAG }}/porter-${{ env.RELEASE_TAG }}-${{ env.ARCH }}.tar.gz
+            release-dist/${{ env.RELEASE_TAG }}/porter-${{ env.RELEASE_TAG }}-${{ env.ARCH }}.tar.gz.sha256
+            release-dist/${{ env.RELEASE_TAG }}/porter-base-image-${{ env.RELEASE_TAG }}-${{ env.ARCH }}.tar.gz
+            release-dist/${{ env.RELEASE_TAG }}/porter-base-image-${{ env.RELEASE_TAG }}-${{ env.ARCH }}.tar.gz.sha256

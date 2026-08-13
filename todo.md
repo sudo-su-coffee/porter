@@ -88,3 +88,33 @@
 - [x] Compare the complete candidate diff against `main` and confirm the expected release files are included.
 - [x] Open one final PR from the candidate branch into `main` with validation evidence and explicit operator-host limitations.
 - [x] Keep the candidate branch until the user reviews and merges the PR.
+
+## Post-merge main and PostgreSQL handoff
+
+- [ ] Verify PR #12 is merged and the current remote `main` contains the final candidate commit/files.
+- [ ] Verify local and remote branch cleanup after the user’s deletion actions.
+- [ ] Re-run API coverage, backend tests/vet, Vue build, and installer-file checks from `main`.
+- [ ] Explain the exact PostgreSQL choices, required operator inputs, data stored in PostgreSQL, and local `/var/porter` state.
+
+## Merged-main database and image-pipeline review
+
+- [ ] Verify migrations and the `porter migrate` command against a real or controlled PostgreSQL connection path.
+- [ ] Verify frontend calls reach the backend contracts from merged `main`, beyond source-only route evidence.
+- [ ] Identify a PostgreSQL path that does not require the user to run Docker on the target server.
+- [ ] Decide whether OCI images are only build inputs and define the conversion boundary to real guest artifacts.
+- [ ] Document the direct Firecracker boot sequence through per-VM Unix sockets and prohibit direct OCI boot claims.
+
+## GitHub one-command installer 404 review
+
+- [ ] Inspect live GitHub release tags and architecture-specific assets for the installer’s default tag.
+- [ ] Confirm whether the 404 is from the raw script URL or the missing daemon/checksum release asset.
+- [ ] Correct the user-facing release/install path without fabricating a package or guest artifacts.
+- [ ] Validate the corrected command and document the exact missing prerequisite if a release cannot yet be published.
+
+## Automated GitHub release build
+
+- [ ] Inspect existing `.github/workflows` and release-builder compatibility.
+- [ ] Define tag-push and manual-dispatch triggers for the Linux release workflow.
+- [ ] Require a real `vmlinux`/`rootfs.ext4` bundle or a secure operator-provided artifact URL/input.
+- [ ] Build the Vue dashboard and Go daemon, verify Firecracker checksums, create daemon/base-image archives and sidecars, and publish a GitHub Release.
+- [ ] Validate the published asset names against `install-from-github.sh` before telling the user to rerun the one-command installer.

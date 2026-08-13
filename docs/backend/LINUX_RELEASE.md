@@ -39,6 +39,20 @@ The local filesystem under `/var/porter` stores the editable `porter.toml`, prot
 
 ## GitHub release packaging
 
+The repository includes `.github/workflows/release.yml`. It supports two
+triggers. A maintainer can use **Actions → Porter Linux release → Run workflow**
+and provide the release tag, architecture, a GitHub Release URL containing a
+real `vmlinux` plus `rootfs.ext4` bundle, and that bundle’s SHA-256 digest. Or a
+maintainer can push a `v*` tag after configuring repository secrets
+`PORTER_BASE_IMAGE_URL` and `PORTER_BASE_IMAGE_SHA256` with the same values.
+
+The guest bundle must already exist in a GitHub Release because the workflow
+downloads and verifies it before creating the daemon release. This avoids a
+chicken-and-egg release upload and prevents the workflow from manufacturing a
+kernel or root filesystem. The workflow then builds the Vue dashboard, embeds it
+in the Go daemon, creates the daemon and base-image archives plus `.sha256`
+sidecars, and publishes the assets expected by `install-from-github.sh`.
+
 ```bash
 PORTER_RELEASE_TAG=v1.0.0-beta \
 PORTER_BASE_IMAGE_DIR=/path/to/real/base-image \

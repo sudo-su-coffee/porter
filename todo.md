@@ -222,3 +222,12 @@
 - [ ] Verify the marketing-site merge is already present on main and isolate the remaining observability diff.
 - [ ] Run the final backend, frontend, metrics, dashboard, mock API, and whitespace checks against the PR branch.
 - [ ] Create a review-only PR from dev-min-changes into main without auto-merging.
+
+## Hardening PR
+- [x] Create a fresh hardening branch from the merged main tip.
+- [x] Add automatic Go, Vue, shell, mock API, dependency, and release-contract CI gates.
+- [x] Run govulncheck and upgrade the affected pgx dependency to the patched release.
+- [x] Add read-only host readiness checks and operator acceptance documentation.
+- [x] Add PostgreSQL backup/restore guidance and release/source pnpm consistency.
+- [x] Add conservative systemd hardening while preserving KVM and network capabilities.
+- [x] Run the final branch validation, push the hardening branch, and open a review-only PR.

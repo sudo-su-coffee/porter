@@ -25,13 +25,17 @@ esac
 [ -f "$BASE_IMAGE_DIR/vmlinux" ] && [ -s "$BASE_IMAGE_DIR/vmlinux" ] || { echo "missing non-empty $BASE_IMAGE_DIR/vmlinux" >&2; exit 2; }
 [ -f "$BASE_IMAGE_DIR/rootfs.ext4" ] && [ -s "$BASE_IMAGE_DIR/rootfs.ext4" ] || { echo "missing non-empty $BASE_IMAGE_DIR/rootfs.ext4" >&2; exit 2; }
 
-command -v npm >/dev/null 2>&1 || { echo "npm is required to build and embed the Vue dashboard" >&2; exit 2; }
-if [ -f "$FRONTEND_DIR/package-lock.json" ]; then
-  (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund)
+if command -v pnpm >/dev/null 2>&1 && [ -f "$FRONTEND_DIR/pnpm-lock.yaml" ]; then
+  (cd "$FRONTEND_DIR" && pnpm install --frozen-lockfile && pnpm run build)
 else
-  (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund)
+  command -v npm >/dev/null 2>&1 || { echo "pnpm or npm is required to build and embed the Vue dashboard" >&2; exit 2; }
+  if [ -f "$FRONTEND_DIR/package-lock.json" ]; then
+    (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund)
+  else
+    (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund)
+  fi
+  (cd "$FRONTEND_DIR" && npm run build)
 fi
-(cd "$FRONTEND_DIR" && npm run build)
 [ -s "$BACKEND_DIR/web/dist/index.html" ] || { echo "Vue build did not produce backend/web/dist/index.html" >&2; exit 2; }
 
 rm -rf "$DIST_DIR"

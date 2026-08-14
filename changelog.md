@@ -21,3 +21,7 @@ Added the opt-in observability contract under `docs/observability/`. OpenTelemet
 ## Minimal observability implementation
 
 The branch now initializes OpenTelemetry traces through the standard OTLP gRPC exporter when `PORTER_OTEL_ENABLED=true`, instruments the HTTP handler chain, correlates the existing `X-Request-Id`, and adds native pgx query spans that expose only PostgreSQL operation names and outcomes. The opt-in `/metrics` route now exposes bounded method/status-class counters and request duration summaries, with matching Prometheus and Grafana configuration. Sentry is available for Go panics/5xx responses and Vue exceptions/5xx API failures only when an explicit DSN and enable flag are configured; request bodies, headers, users, breadcrumbs, SQL text, and credentials are removed from events.
+
+## Hardening branch
+
+Added automatic CI for Go tests/vet/build, pinned `govulncheck`, Vue frozen-lockfile builds, production dependency audit, mock API health, shell syntax, PostgreSQL installer regression tests, and release-contract checks. The security scan identified and fixed the affected `github.com/jackc/pgx/v5` dependency by upgrading it to `v5.9.2`. Added a read-only Linux host readiness script, host acceptance documentation, PostgreSQL backup/restore guidance, conservative systemd restrictions, and deterministic pnpm usage in release/source builds. External telemetry remains disabled by default.

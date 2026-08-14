@@ -104,3 +104,5 @@ The directory supplied through `PORTER_BASE_IMAGE_DIR` must contain the actual g
 ## Validation boundary
 
 The repository can validate Go compilation, embedded dashboard assets, Vue production builds, Firecracker checksum metadata, shell syntax, migration wiring, and archive integrity in the sandbox. It cannot validate privileged KVM/TAP boot behavior here because `/dev/kvm` is unavailable, and it cannot fabricate a guest image. Before announcing a fully boot-tested beta, run the installer and one real deploy on an operator Linux host with KVM, TAP permissions, PostgreSQL, the pinned Firecracker binary, and a compatible `vmlinux`/`rootfs.ext4` pair.
+
+Use [`HOST_ACCEPTANCE.md`](HOST_ACCEPTANCE.md) for the ordered read-only readiness, authenticated API smoke, Firecracker lifecycle, metrics, and rollback checks. Before upgrading a host with real users, follow [`BACKUP_RESTORE.md`](BACKUP_RESTORE.md) and verify a PostgreSQL restore in a disposable database.

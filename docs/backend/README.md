@@ -39,6 +39,8 @@ The Go entrypoint is `cmd/porter/main.go`. The embedded frontend is built into
 | [`PAGE_API_GAP_AUDIT.md`](PAGE_API_GAP_AUDIT.md) | Latest missing-page and endpoint audit |
 | [`DEPLOYMENT.md`](DEPLOYMENT.md) | Development and host setup guidance |
 | [`RELEASE_AUDIT_BETA_DEV.md`](RELEASE_AUDIT_BETA_DEV.md) | Beta-dev readiness and known limitations |
+| [`HOST_ACCEPTANCE.md`](HOST_ACCEPTANCE.md) | Read-only host readiness, API smoke, Firecracker, and observability acceptance |
+| [`BACKUP_RESTORE.md`](BACKUP_RESTORE.md) | PostgreSQL backup, restore, checksum, and retention runbook |
 
 ## Database-seeded RBAC
 

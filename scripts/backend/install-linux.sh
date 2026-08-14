@@ -49,13 +49,17 @@ case "$ARCH" in x86_64|aarch64) ;; *) die "unsupported architecture: $ARCH" ;; e
 
 if [ "${PORTER_SKIP_FRONTEND_BUILD:-0}" != 1 ]; then
   note "Build and embed Vue dashboard"
-  command -v npm >/dev/null 2>&1 || die "npm is required to build the Vue dashboard; use PORTER_SKIP_FRONTEND_BUILD=1 only when backend/web/dist is already built"
-  if [ -f "$FRONTEND_DIR/package-lock.json" ]; then
-    (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund)
-  elif [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-    (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund)
+  if command -v pnpm >/dev/null 2>&1 && [ -f "$FRONTEND_DIR/pnpm-lock.yaml" ]; then
+    (cd "$FRONTEND_DIR" && pnpm install --frozen-lockfile && pnpm run build)
+  else
+    command -v npm >/dev/null 2>&1 || die "pnpm or npm is required to build the Vue dashboard; use PORTER_SKIP_FRONTEND_BUILD=1 only when backend/web/dist is already built"
+    if [ -f "$FRONTEND_DIR/package-lock.json" ]; then
+      (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund)
+    elif [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+      (cd "$FRONTEND_DIR" && npm install --no-audit --no-fund)
+    fi
+    (cd "$FRONTEND_DIR" && npm run build)
   fi
-  (cd "$FRONTEND_DIR" && npm run build)
 else
   [ -f "$BACKEND_DIR/web/dist/index.html" ] || die "backend/web/dist/index.html is missing; build the frontend first"
   warn "skipping frontend build; using existing backend/web/dist"

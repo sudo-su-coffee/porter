@@ -2,10 +2,12 @@ module porter
 
 go 1.25.0
 
+toolchain go1.26.6
+
 require (
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.7.2
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/miekg/dns v1.1.72
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0
 	go.opentelemetry.io/otel v1.45.0

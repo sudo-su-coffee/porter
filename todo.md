@@ -217,3 +217,8 @@
 - [x] Add opt-in Sentry error reporting for Vue and Go with secret and payload redaction.
 - [x] Add telemetry-disabled tests and update the configuration, privacy, and developer documentation.
 - [x] Validate builds, tests, mock preview behavior, dashboards, and screenshots, then push only dev-min-changes.
+
+## Main PR preparation
+- [ ] Verify the marketing-site merge is already present on main and isolate the remaining observability diff.
+- [ ] Run the final backend, frontend, metrics, dashboard, mock API, and whitespace checks against the PR branch.
+- [ ] Create a review-only PR from dev-min-changes into main without auto-merging.

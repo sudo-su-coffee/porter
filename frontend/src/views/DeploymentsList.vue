@@ -129,8 +129,8 @@ onUnmounted(() => disconnectEvents());
 <template>
   <div class="page-header">
     <div>
-      <div class="page-title">Deployments</div>
-      <div class="page-sub">Projects and their replica pools on this host</div>
+      <div class="page-title">Projects</div>
+      <div class="page-sub">Application workspaces and their live replica pools</div>
     </div>
     <div class="view-toggle" role="tablist" aria-label="Layout">
       <button :class="{ active: view === 'list' }" title="List view" aria-label="List view" @click="setView('list')">☷</button>
@@ -140,9 +140,9 @@ onUnmounted(() => disconnectEvents());
 
   <section class="deployment-command-deck">
     <div class="command-copy">
-      <div class="command-kicker">PORTER / DEPLOY</div>
+      <div class="command-kicker">PORTER / PROJECTS</div>
       <h1>Ship a healthy microVM, not a fragile pile of runtime glue.</h1>
-      <p>Choose a direct image, bring your own Firecracker bundle, or open an existing project to watch its replica pool settle.</p>
+      <p>Choose a direct image, bring your own Firecracker bundle, or open a project to inspect its releases and live replica pool.</p>
       <div class="command-actions">
         <button class="btn btn-primary" @click="router.push({ name: 'new-project' })">New project</button>
         <button class="btn btn-primary" @click="router.push({ name: 'images' })">Browse direct images</button>

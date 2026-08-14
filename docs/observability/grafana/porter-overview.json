@@ -1,0 +1,39 @@
+{
+  "title": "Porter Control Plane Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "HTTP request rate",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum(rate(porter_http_requests_by_method_total[5m])) by (method)", "legendFormat": "{{method}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP average latency",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [{ "expr": "rate(porter_http_request_duration_seconds_sum[5m]) / rate(porter_http_request_duration_seconds_count[5m])", "legendFormat": "average" }]
+    },
+    {
+      "type": "stat",
+      "title": "Total requests",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+      "targets": [{ "expr": "porter_http_requests_total", "legendFormat": "requests" }]
+    },
+    {
+      "type": "stat",
+      "title": "Server errors",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 8 },
+      "targets": [{ "expr": "porter_http_server_errors_total", "legendFormat": "5xx" }]
+    },
+    {
+      "type": "stat",
+      "title": "Response status classes",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 8 },
+      "targets": [{ "expr": "sum(porter_http_responses_by_status_class_total) by (status_class)", "legendFormat": "{{status_class}}" }]
+    }
+  ]
+}

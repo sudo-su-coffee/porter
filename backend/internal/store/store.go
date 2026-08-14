@@ -25,6 +25,7 @@ import (
 
 	"porter/internal/auth"
 	"porter/internal/cache"
+	"porter/internal/observability"
 	"porter/internal/types"
 	"porter/migrations"
 )
@@ -58,7 +59,12 @@ const (
 // a ready store. Fatal on failure — the server must not start without its DB.
 func NewStore(dsn string) *Store {
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		log.Fatalf("store: parse postgres config %q: %v", dsn, err)
+	}
+	poolConfig.ConnConfig.Tracer = observability.NewPGXTracer()
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		log.Fatalf("store: connect postgres %q: %v", dsn, err)
 	}

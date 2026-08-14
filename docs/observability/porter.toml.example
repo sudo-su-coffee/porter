@@ -1,0 +1,27 @@
+# Development-only observability example.
+# Do not copy provider credentials into this file.
+
+[development]
+enabled = true
+log_level = "debug"
+request_logging = true
+api_errors = true
+metrics_enabled = true
+
+[observability]
+otel_enabled = false
+otel_service_name = "porter-control-plane"
+sentry_enabled = false
+sentry_environment = "development"
+# Keep DSNs in protected environment variables, not this file:
+# PORTER_SENTRY_DSN=
+
+# External providers stay disabled until their environment-specific secrets and
+# privacy/retention policy are reviewed:
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
+# OTEL_EXPORTER_OTLP_HEADERS=
+# PORTER_OTEL_ENABLED=true
+# PORTER_SENTRY_ENABLED=true
+# PORTER_SENTRY_DSN=https://public-key@example.ingest.sentry.io/project-id
+# VITE_SENTRY_ENABLED=true
+# VITE_SENTRY_DSN=https://public-key@example.ingest.sentry.io/project-id

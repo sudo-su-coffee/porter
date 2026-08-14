@@ -197,3 +197,28 @@
 - [ ] Make the public install.sh work when stdin is a curl pipe under `set -u` without assuming BASH_SOURCE exists.
 - [ ] Allow the new bootstrap to delegate to both new and legacy cached release packages, or fail with a clear refresh message.
 - [ ] Test the exact `curl -fsSL .../install.sh | sudo bash` path against a controlled cached package and verify the fresh release package contents.
+
+## Opt-in observability plan
+
+- [ ] Define OpenTelemetry as the common instrumentation boundary for Go request traces, runtime spans, and frontend correlation where practical.
+- [ ] Add Prometheus-compatible backend metrics for request latency, status classes, VM lifecycle, replica health, deployment outcomes, database pool health, and resource usage.
+- [ ] Add Grafana dashboard definitions and a local development compose/config example without making Grafana a production runtime dependency.
+- [ ] Add Sentry error tracking as an opt-in, redacted exception sink for Go and Vue development/staging environments.
+- [ ] Add PostHog product analytics as an opt-in frontend behavior sink for navigation, project, deployment, and preview workflows; never send secrets or raw infrastructure payloads.
+- [ ] Document telemetry consent, data minimization, sampling, retention, environment separation, and disabled-by-default production behavior.
+- [ ] Validate telemetry configuration, metric output, trace correlation, error redaction, and analytics opt-out behavior.
+
+## Observability implementation expansion
+- [x] Audit the current observability package, Go module, Vue package, and configuration files before adding SDK dependencies.
+- [x] Add opt-in OpenTelemetry SDK initialization and shutdown handling for the Go daemon.
+- [x] Instrument inbound HTTP requests with trace context and request-ID correlation.
+- [x] Instrument PostgreSQL operations without recording SQL parameters, credentials, or database URLs.
+- [x] Keep the bounded Prometheus endpoint and align its metric names and Grafana queries with the instrumented signals.
+- [x] Add opt-in Sentry error reporting for Vue and Go with secret and payload redaction.
+- [x] Add telemetry-disabled tests and update the configuration, privacy, and developer documentation.
+- [x] Validate builds, tests, mock preview behavior, dashboards, and screenshots, then push only dev-min-changes.
+
+## Main PR preparation
+- [ ] Verify the marketing-site merge is already present on main and isolate the remaining observability diff.
+- [ ] Run the final backend, frontend, metrics, dashboard, mock API, and whitespace checks against the PR branch.
+- [ ] Create a review-only PR from dev-min-changes into main without auto-merging.

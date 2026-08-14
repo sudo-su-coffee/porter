@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from "vue";
-import { useRouter } from "vue-router";
+import { useRouter, useRoute } from "vue-router";
 import { api } from "../api/client";
 import { connectEvents, disconnectEvents } from "../api/events";
 import StatusBadge from "../components/StatusBadge.vue";
@@ -16,6 +16,7 @@ import { toast } from "../components/toast";
 
 const props = defineProps({ id: { type: String, required: true } });
 const router = useRouter();
+const route = useRoute();
 
 const project = ref(null);
 const vms = ref([]);
@@ -32,7 +33,12 @@ const newEnv = ref({ key: "", value: "" });
 const editingEnv = ref(null);
 const envDraft = ref({ value: "" });
 
-const TABS = ["overview", "deployments", "builds", "analytics", "traffic", "logs", "domains", "environment", "secrets", "crons", "firewall", "settings"];
+const TAB_GROUPS = [
+  { label: "Operate", tabs: [["overview", "Overview"], ["deployments", "Deployments"], ["builds", "Builds"]] },
+  { label: "Observe", tabs: [["analytics", "Analytics"], ["traffic", "Traffic"], ["logs", "Logs"]] },
+  { label: "Configure", tabs: [["domains", "Domains"], ["environment", "Environment"], ["secrets", "Secrets"], ["crons", "Cron jobs"], ["firewall", "Firewall"], ["settings", "Settings"]] },
+];
+const validTabs = new Set(TAB_GROUPS.flatMap((group) => group.tabs.map(([key]) => key)));
 
 const runningReplicas = computed(() => vms.value.filter((v) => v.state === "running").length);
 const healthyReplicas = computed(() => vms.value.filter((v) => v.health_status === "healthy").length);
@@ -144,6 +150,11 @@ async function verifyDomain(d) {
   }
 }
 
+function selectTab(next) {
+  tab.value = next;
+  router.replace({ query: { ...route.query, tab: next } });
+}
+
 function beginEnvEdit(entry) {
   editingEnv.value = entry.key;
   envDraft.value = { value: entry.value || "" };
@@ -198,6 +209,7 @@ async function rollback(d) {
 }
 
 onMounted(() => {
+  if (typeof route.query.tab === "string" && validTabs.has(route.query.tab)) tab.value = route.query.tab;
   load();
   connectEvents(() => load());
 });
@@ -205,7 +217,7 @@ onUnmounted(() => disconnectEvents());
 </script>
 
 <template>
-  <a class="back-link" @click="router.push({ name: 'list' })">&larr; Deployments</a>
+  <a class="back-link" @click="router.push({ name: 'projects' })">&larr; Projects</a>
 
   <div v-if="error" class="error-box">{{ error }}</div>
 
@@ -235,8 +247,13 @@ onUnmounted(() => disconnectEvents());
       <div class="surface-stat"><span class="stat-label">Latest release</span><strong>#{{ latestDeployment?.revision ?? '—' }}</strong><span class="hint">{{ latestDeployment?.build_status || 'no deployment yet' }}</span></div>
     </section>
 
-    <div class="seg" style="margin-bottom:18px">
-      <button v-for="t in TABS" :key="t" :class="{ active: tab === t }" @click="tab = t">{{ t }}</button>
+    <div class="project-tabs" aria-label="Project workspace sections">
+      <div v-for="group in TAB_GROUPS" :key="group.label" class="project-tab-group">
+        <span class="project-tab-label">{{ group.label }}</span>
+        <div class="seg">
+          <button v-for="[key, label] in group.tabs" :key="key" :class="{ active: tab === key }" @click="selectTab(key)">{{ label }}</button>
+        </div>
+      </div>
     </div>
 
     <!-- Overview -->

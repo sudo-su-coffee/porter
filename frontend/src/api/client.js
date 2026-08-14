@@ -10,6 +10,8 @@
 // login and attach it automatically. All dashboard writes (create project,
 // scale, start/stop/restart, domains, teams, …) depend on this.
 
+import { captureApiFailure } from "../observability";
+
 const TOKEN_KEY = "porter_token";
 const ORG_KEY = "porter_org_id";
 
@@ -94,11 +96,17 @@ export async function api(path, opts = {}) {
     // No JSON body (e.g. 204 No Content) — fine.
   }
 
-  if (!res.ok) {
-    const err = new Error((body && body.error) || `HTTP ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
+	if (!res.ok) {
+		const err = new Error((body && body.error) || `HTTP ${res.status}`);
+		err.status = res.status;
+		captureApiFailure(err, {
+			path,
+			method,
+			status: res.status,
+			requestId: res.headers.get("X-Request-Id") || "",
+		});
+		throw err;
+	}
 
   return body;
 }

@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Options struct {
@@ -49,6 +52,9 @@ func Middleware(logger *slog.Logger, enabled bool, next http.Handler) http.Handl
 		}
 		w.Header().Set("X-Request-Id", requestID)
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, requestID))
+		if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+			span.SetAttributes(attribute.String("porter.request_id", requestID))
+		}
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
 		logger.Info("http request", "request_id", requestID, "method", r.Method, "path", r.URL.Path, "status", rw.status, "duration_ms", time.Since(started).Milliseconds())

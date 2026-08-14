@@ -90,11 +90,16 @@ type Config struct {
 	BootstrapAdminPassword string
 
 	// Development observability is opt-in and never changes authorization behavior.
-	DevEnabled       bool
-	LogLevel         string
-	RequestLogging   bool
-	IncludeAPIErrors bool
-	MetricsEnabled   bool // bounded Prometheus-compatible metrics endpoint
+	DevEnabled        bool
+	LogLevel          string
+	RequestLogging    bool
+	IncludeAPIErrors  bool
+	MetricsEnabled    bool // bounded Prometheus-compatible metrics endpoint
+	OTelEnabled       bool
+	OTelServiceName   string
+	SentryEnabled     bool
+	SentryDSN         string
+	SentryEnvironment string
 }
 
 // LoadConfig reads the TOML file at path (if present) and layers
@@ -120,6 +125,8 @@ func LoadConfig(path string) (*Config, error) {
 		VolumesDir:           "volumes",
 		SMTPPort:             587,
 		LogLevel:             "info",
+		OTelServiceName:      "porter-control-plane",
+		SentryEnvironment:    "development",
 	}
 
 	data, err := os.ReadFile(path)
@@ -171,6 +178,11 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.RequestLogging = tomlBool(sections, "development", "request_logging", cfg.RequestLogging)
 		cfg.IncludeAPIErrors = tomlBool(sections, "development", "api_errors", cfg.IncludeAPIErrors)
 		cfg.MetricsEnabled = tomlBool(sections, "development", "metrics_enabled", cfg.MetricsEnabled)
+		cfg.OTelEnabled = tomlBool(sections, "observability", "otel_enabled", cfg.OTelEnabled)
+		cfg.OTelServiceName = tomlGet(sections, "observability", "otel_service_name", cfg.OTelServiceName)
+		cfg.SentryEnabled = tomlBool(sections, "observability", "sentry_enabled", cfg.SentryEnabled)
+		cfg.SentryDSN = tomlGet(sections, "observability", "sentry_dsn", cfg.SentryDSN)
+		cfg.SentryEnvironment = tomlGet(sections, "observability", "sentry_environment", cfg.SentryEnvironment)
 
 	case os.IsNotExist(err):
 		// No porter.toml — fine, env vars / defaults carry the config.
@@ -223,6 +235,11 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.RequestLogging = envBool("PORTER_REQUEST_LOGGING", cfg.RequestLogging)
 	cfg.IncludeAPIErrors = envBool("PORTER_API_ERRORS", cfg.IncludeAPIErrors)
 	cfg.MetricsEnabled = envBool("PORTER_METRICS_ENABLED", cfg.MetricsEnabled)
+	cfg.OTelEnabled = envBool("PORTER_OTEL_ENABLED", cfg.OTelEnabled)
+	cfg.OTelServiceName = envOr("PORTER_OTEL_SERVICE_NAME", cfg.OTelServiceName)
+	cfg.SentryEnabled = envBool("PORTER_SENTRY_ENABLED", cfg.SentryEnabled)
+	cfg.SentryDSN = envOr("PORTER_SENTRY_DSN", cfg.SentryDSN)
+	cfg.SentryEnvironment = envOr("PORTER_SENTRY_ENVIRONMENT", cfg.SentryEnvironment)
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("no database url configured — set [database] url in %s or PORTER_DATABASE_URL", path)

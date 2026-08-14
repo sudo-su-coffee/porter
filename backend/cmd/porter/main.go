@@ -122,8 +122,26 @@ func runServer(args []string) int {
 		log.Fatalf("config error: %v", err)
 	}
 	logger := logging.Configure(logging.Options{Enabled: cfg.DevEnabled, Level: cfg.LogLevel, RequestLogging: cfg.RequestLogging, IncludeAPIError: cfg.IncludeAPIErrors})
+	traceShutdown, traceErr := observability.InitTracing(context.Background(), cfg.OTelEnabled, cfg.OTelServiceName)
+	if traceErr != nil {
+		log.Printf("observability: OpenTelemetry disabled: %v", traceErr)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := traceShutdown(ctx); err != nil {
+				log.Printf("observability: OpenTelemetry shutdown: %v", err)
+			}
+		}()
+	}
+	sentryCleanup, sentryErr := observability.InitSentry(cfg.SentryEnabled, cfg.SentryDSN, cfg.SentryEnvironment, Version)
+	if sentryErr != nil {
+		log.Printf("observability: Sentry disabled: %v", sentryErr)
+	} else {
+		defer sentryCleanup()
+	}
 	if cfg.DevEnabled {
-		logger.Info("development observability enabled", "log_level", cfg.LogLevel, "request_logging", cfg.RequestLogging, "api_errors", cfg.IncludeAPIErrors)
+		logger.Info("development observability enabled", "log_level", cfg.LogLevel, "request_logging", cfg.RequestLogging, "api_errors", cfg.IncludeAPIErrors, "otel", cfg.OTelEnabled, "metrics", cfg.MetricsEnabled, "sentry", cfg.SentryEnabled && cfg.SentryDSN != "")
 	}
 
 	// Startup sanity check: report direct Firecracker prerequisites before the
@@ -357,7 +375,13 @@ func runServer(args []string) int {
 		handler = telemetry.Middleware(handler)
 		log.Printf("metrics: Prometheus endpoint enabled at /metrics")
 	}
+	if cfg.OTelEnabled {
+		handler = observability.HTTPHandler(handler)
+	}
 	handler = logging.Middleware(logger, cfg.DevEnabled && cfg.RequestLogging, handler)
+	if cfg.SentryEnabled && cfg.SentryDSN != "" {
+		handler = observability.SentryHandler(handler)
+	}
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           handler,

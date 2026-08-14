@@ -10,3 +10,5 @@ Representative browser captures are stored by the sandbox at:
 
 - `/home/ubuntu/screenshots/127_0_0_1_2026-08-14_01-47-57_8886.webp` — projects route.
 - `/home/ubuntu/screenshots/127_0_0_1_2026-08-14_01-48-11_1169.webp` — project detail route.
+
+After adding the opt-in Sentry bootstrap, the same routes were rechecked successfully. With no `VITE_SENTRY_ENABLED=true` and no DSN, the UI remains in the labeled synthetic preview mode and renders without external error-tracking initialization. The latest captures are `/home/ubuntu/screenshots/127_0_0_1_2026-08-14_02-22-52_7878.webp` for Projects and `/home/ubuntu/screenshots/127_0_0_1_2026-08-14_02-23-06_2369.webp` for Project Detail.

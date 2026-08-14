@@ -207,3 +207,13 @@
 - [ ] Add PostHog product analytics as an opt-in frontend behavior sink for navigation, project, deployment, and preview workflows; never send secrets or raw infrastructure payloads.
 - [ ] Document telemetry consent, data minimization, sampling, retention, environment separation, and disabled-by-default production behavior.
 - [ ] Validate telemetry configuration, metric output, trace correlation, error redaction, and analytics opt-out behavior.
+
+## Observability implementation expansion
+- [x] Audit the current observability package, Go module, Vue package, and configuration files before adding SDK dependencies.
+- [x] Add opt-in OpenTelemetry SDK initialization and shutdown handling for the Go daemon.
+- [x] Instrument inbound HTTP requests with trace context and request-ID correlation.
+- [x] Instrument PostgreSQL operations without recording SQL parameters, credentials, or database URLs.
+- [x] Keep the bounded Prometheus endpoint and align its metric names and Grafana queries with the instrumented signals.
+- [x] Add opt-in Sentry error reporting for Vue and Go with secret and payload redaction.
+- [x] Add telemetry-disabled tests and update the configuration, privacy, and developer documentation.
+- [x] Validate builds, tests, mock preview behavior, dashboards, and screenshots, then push only dev-min-changes.

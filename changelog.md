@@ -17,3 +17,7 @@ The installer, PostgreSQL provisioning, Firecracker artifact distribution, guest
 ## Observability foundation
 
 Added the opt-in observability contract under `docs/observability/`. OpenTelemetry is defined as the common instrumentation boundary; Prometheus/Grafana own bounded operational metrics; Sentry is reserved for redacted exception tracking; and PostHog is reserved for consent-controlled product analytics. Added a version-controlled Grafana overview dashboard for request rate, p95 latency, replica state, failed deployments, and connected event streams. Production provider integrations remain disabled unless explicitly configured.
+
+## Minimal observability implementation
+
+The branch now initializes OpenTelemetry traces through the standard OTLP gRPC exporter when `PORTER_OTEL_ENABLED=true`, instruments the HTTP handler chain, correlates the existing `X-Request-Id`, and adds native pgx query spans that expose only PostgreSQL operation names and outcomes. The opt-in `/metrics` route now exposes bounded method/status-class counters and request duration summaries, with matching Prometheus and Grafana configuration. Sentry is available for Go panics/5xx responses and Vue exceptions/5xx API failures only when an explicit DSN and enable flag are configured; request bodies, headers, users, breadcrumbs, SQL text, and credentials are removed from events.

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://portermktg-epn9z6ry.manus.space/sitemap.xml

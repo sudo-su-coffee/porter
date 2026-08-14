@@ -1,0 +1,17 @@
+{
+  "name": "Porter",
+  "short_name": "Porter",
+  "description": "The self-hosted deployment platform that stays yours.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f2ec",
+  "theme_color": "#f4f2ec",
+  "icons": [
+    {
+      "src": "/manus-storage/porter-mark_77bf4dfd.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

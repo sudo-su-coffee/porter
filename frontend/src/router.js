@@ -1,7 +1,9 @@
 // Porter Vue router: core workflows use dedicated components; operational
 // resource screens use one real ResourceManager with route-specific API schema.
 import { createRouter, createWebHashHistory } from "vue-router";
-import { getToken } from "./api/client";
+import { getToken, setToken } from "./api/client";
+
+const previewMode = import.meta.env.VITE_PORTER_PREVIEW === "true";
 
 import DeploymentsList from "./views/DeploymentsList.vue";
 import Analytics from "./views/Analytics.vue";
@@ -43,6 +45,8 @@ const resource = (title, description, endpoint, extra = {}) => ({ resource: { ti
 
 const routes = [
   { path: "/", name: "list", component: DeploymentsList },
+  { path: "/projects", name: "projects", component: DeploymentsList },
+  { path: "/deployments", name: "deployments", component: ResourceManager, meta: resource("Deployments", "Release history and rollout state across projects.", "/deployments", { back: false }) },
   { path: "/projects/new", name: "new-project", component: NewProject },
   { path: "/analytics", name: "analytics", component: Analytics },
   { path: "/projects/:id", name: "project", component: ProjectDetail, props: true },
@@ -163,6 +167,7 @@ const routes = [
 const router = createRouter({ history: createWebHashHistory(), routes });
 
 router.beforeEach((to) => {
+  if (previewMode && !getToken()) setToken("dev-preview-token");
   if (to.name !== "login" && !getToken()) return { name: "login" };
 });
 

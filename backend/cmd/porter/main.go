@@ -28,9 +28,11 @@ import (
 	"porter/internal/gateway"
 	"porter/internal/health"
 	"porter/internal/imagecatalog"
+	"porter/internal/logging"
 	"porter/internal/metrics"
 	"porter/internal/netmgr"
 	"porter/internal/notify"
+	"porter/internal/observability"
 	rt "porter/internal/runtime"
 	"porter/internal/sshgw"
 	"porter/internal/startup"
@@ -118,6 +120,10 @@ func runServer(args []string) int {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("config error: %v", err)
+	}
+	logger := logging.Configure(logging.Options{Enabled: cfg.DevEnabled, Level: cfg.LogLevel, RequestLogging: cfg.RequestLogging, IncludeAPIError: cfg.IncludeAPIErrors})
+	if cfg.DevEnabled {
+		logger.Info("development observability enabled", "log_level", cfg.LogLevel, "request_logging", cfg.RequestLogging, "api_errors", cfg.IncludeAPIErrors)
 	}
 
 	// Startup sanity check: report direct Firecracker prerequisites before the
@@ -334,9 +340,27 @@ func runServer(args []string) int {
 		mux.Handle("/", http.FileServer(http.Dir("./web/dist")))
 	}
 
+	if cfg.DevEnabled && cfg.RequestLogging {
+		mux = http.NewServeMux()
+		a.Routes(mux)
+		if sub, err := fs.Sub(assets.Dist, "web/dist"); err == nil {
+			mux.Handle("/", http.FileServer(http.FS(sub)))
+		} else {
+			mux.Handle("/", http.FileServer(http.Dir("./web/dist")))
+		}
+	}
+
+	var handler http.Handler = mux
+	if cfg.MetricsEnabled {
+		telemetry := observability.NewMetrics()
+		mux.HandleFunc("/metrics", telemetry.Handler)
+		handler = telemetry.Middleware(handler)
+		log.Printf("metrics: Prometheus endpoint enabled at /metrics")
+	}
+	handler = logging.Middleware(logger, cfg.DevEnabled && cfg.RequestLogging, handler)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
@@ -344,7 +368,8 @@ func runServer(args []string) int {
 	if tlsMgr != nil {
 		srv.TLSConfig = tlsMgr.GetTLSConfig()
 		// Wrap mux with ACME HTTP challenge handler
-		srv.Handler = tlsMgr.HTTPHandler(mux)
+		srv.Handler = tlsMgr.HTTPHandler(handler)
+
 		log.Printf("Porter %s — Control API listening on %s (HTTPS enabled)", Version, cfg.ListenAddr)
 	} else {
 		log.Printf("Porter %s — Control API listening on %s", Version, cfg.ListenAddr)

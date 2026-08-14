@@ -1,0 +1,15 @@
+# Development-only observability example.
+# Do not copy provider credentials into this file.
+
+[development]
+enabled = true
+log_level = "debug"
+request_logging = true
+api_errors = true
+metrics_enabled = true
+
+# External providers stay disabled until their environment-specific secrets and
+# privacy/retention policy are reviewed:
+# PORTER_OTEL_ENABLED=false
+# PORTER_SENTRY_ENABLED=false
+# VITE_POSTHOG_ENABLED=false

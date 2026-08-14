@@ -6,6 +6,8 @@ import vue from "@vitejs/plugin-vue";
 // into ../backend/web/dist so `go build` in backend/ always bundles
 // whatever was last built. During development, `npm run dev` proxies
 // API calls to a locally running `porter` backend on :8080 instead.
+const apiTarget = process.env.VITE_PORTER_PREVIEW === "true" ? "http://127.0.0.1:8787" : "http://localhost:8080";
+
 export default defineConfig({
   plugins: [vue()],
   build: {
@@ -18,17 +20,21 @@ export default defineConfig({
       // "/vms/{id}", "/vms/{id}/logs", "/vms/{id}/domains/{domain}",
       // DELETE/PATCH verbs, etc. "/projects" likewise covers
       // "/projects/{id}" and "/projects/{id}/services/{svc}/scale".
-      "/login": "http://localhost:8080",
-      "/health": "http://localhost:8080",
-      "/overview": "http://localhost:8080",
-      "/images": "http://localhost:8080",
-      "/logs": "http://localhost:8080",
-      "/servers": "http://localhost:8080",
-      "/volumes": "http://localhost:8080",
-      "/vms": "http://localhost:8080",
-      "/projects": "http://localhost:8080",
+      "/auth/login": apiTarget,
+      "/login": apiTarget,
+      "/csrf": apiTarget,
+      "/health": apiTarget,
+      "/overview": apiTarget,
+      "/images": apiTarget,
+      "/logs": apiTarget,
+      "/servers": apiTarget,
+      "/volumes": apiTarget,
+      "/vms": apiTarget,
+      "/projects": apiTarget,
+      "/deployments": apiTarget,
+      "/replicas": apiTarget,
       "/events": {
-        target: "http://localhost:8080",
+        target: apiTarget,
         ws: false,
       },
     },

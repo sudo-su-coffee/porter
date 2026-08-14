@@ -88,6 +88,13 @@ type Config struct {
 	// row has no password hash. It is never written to TOML or used as a
 	// privileged authorization fallback.
 	BootstrapAdminPassword string
+
+	// Development observability is opt-in and never changes authorization behavior.
+	DevEnabled       bool
+	LogLevel         string
+	RequestLogging   bool
+	IncludeAPIErrors bool
+	MetricsEnabled   bool // bounded Prometheus-compatible metrics endpoint
 }
 
 // LoadConfig reads the TOML file at path (if present) and layers
@@ -112,6 +119,7 @@ func LoadConfig(path string) (*Config, error) {
 		CacheTTLSeconds:      15,
 		VolumesDir:           "volumes",
 		SMTPPort:             587,
+		LogLevel:             "info",
 	}
 
 	data, err := os.ReadFile(path)
@@ -158,6 +166,12 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.SMTPPassword = tomlGet(sections, "notify", "smtp_password", cfg.SMTPPassword)
 		cfg.SMTPFrom = tomlGet(sections, "notify", "from", cfg.SMTPFrom)
 		cfg.NotifyDefaultTo = tomlGet(sections, "notify", "default_to", cfg.NotifyDefaultTo)
+		cfg.DevEnabled = tomlBool(sections, "development", "enabled", cfg.DevEnabled)
+		cfg.LogLevel = tomlGet(sections, "development", "log_level", cfg.LogLevel)
+		cfg.RequestLogging = tomlBool(sections, "development", "request_logging", cfg.RequestLogging)
+		cfg.IncludeAPIErrors = tomlBool(sections, "development", "api_errors", cfg.IncludeAPIErrors)
+		cfg.MetricsEnabled = tomlBool(sections, "development", "metrics_enabled", cfg.MetricsEnabled)
+
 	case os.IsNotExist(err):
 		// No porter.toml — fine, env vars / defaults carry the config.
 	default:
@@ -204,6 +218,11 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.SMTPPassword = envOr("PORTER_SMTP_PASSWORD", cfg.SMTPPassword)
 	cfg.SMTPFrom = envOr("PORTER_SMTP_FROM", cfg.SMTPFrom)
 	cfg.NotifyDefaultTo = envOr("PORTER_NOTIFY_DEFAULT_TO", cfg.NotifyDefaultTo)
+	cfg.DevEnabled = envBool("PORTER_DEV_ENABLED", cfg.DevEnabled)
+	cfg.LogLevel = envOr("PORTER_LOG_LEVEL", cfg.LogLevel)
+	cfg.RequestLogging = envBool("PORTER_REQUEST_LOGGING", cfg.RequestLogging)
+	cfg.IncludeAPIErrors = envBool("PORTER_API_ERRORS", cfg.IncludeAPIErrors)
+	cfg.MetricsEnabled = envBool("PORTER_METRICS_ENABLED", cfg.MetricsEnabled)
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("no database url configured — set [database] url in %s or PORTER_DATABASE_URL", path)

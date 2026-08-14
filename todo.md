@@ -197,3 +197,13 @@
 - [ ] Make the public install.sh work when stdin is a curl pipe under `set -u` without assuming BASH_SOURCE exists.
 - [ ] Allow the new bootstrap to delegate to both new and legacy cached release packages, or fail with a clear refresh message.
 - [ ] Test the exact `curl -fsSL .../install.sh | sudo bash` path against a controlled cached package and verify the fresh release package contents.
+
+## Opt-in observability plan
+
+- [ ] Define OpenTelemetry as the common instrumentation boundary for Go request traces, runtime spans, and frontend correlation where practical.
+- [ ] Add Prometheus-compatible backend metrics for request latency, status classes, VM lifecycle, replica health, deployment outcomes, database pool health, and resource usage.
+- [ ] Add Grafana dashboard definitions and a local development compose/config example without making Grafana a production runtime dependency.
+- [ ] Add Sentry error tracking as an opt-in, redacted exception sink for Go and Vue development/staging environments.
+- [ ] Add PostHog product analytics as an opt-in frontend behavior sink for navigation, project, deployment, and preview workflows; never send secrets or raw infrastructure payloads.
+- [ ] Document telemetry consent, data minimization, sampling, retention, environment separation, and disabled-by-default production behavior.
+- [ ] Validate telemetry configuration, metric output, trace correlation, error redaction, and analytics opt-out behavior.

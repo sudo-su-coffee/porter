@@ -66,10 +66,10 @@ func hashToken(raw string) string {
 // ----------------------------------------------------------------------------
 // Multi-replica runtime helper shared by scale/start/stop/restart.
 // ----------------------------------------------------------------------------
-func (a *API) mutateReplicas(projID string, idxFilter func(int) bool, state string) (n int) {
+func (a *API) mutateReplicas(projID string, idxFilter func(int) bool, state string) (n int, failures []string) {
 	proj, ok := a.store.GetProject(projID)
 	if !ok {
-		return 0
+		return 0, []string{"project not found"}
 	}
 	for i, vmID := range proj.VMIDs {
 		if idxFilter != nil && !idxFilter(i) {
@@ -77,19 +77,27 @@ func (a *API) mutateReplicas(projID string, idxFilter func(int) bool, state stri
 		}
 		vm, ok := a.store.GetVM(vmID)
 		if !ok {
+			failures = append(failures, fmt.Sprintf("%s: replica not found", vmID))
 			continue
 		}
+		var err error
 		switch state {
 		case "stop":
-			_ = a.vmm.Stop(context.Background(), vm)
+			err = a.vmm.Stop(context.Background(), vm)
 		case "start":
-			_ = a.vmm.Boot(context.Background(), vm)
+			err = a.vmm.Boot(context.Background(), vm)
 		case "restart":
-			_ = a.vmm.Restart(context.Background(), vm)
+			err = a.vmm.Restart(context.Background(), vm)
+		default:
+			err = fmt.Errorf("unsupported replica action %q", state)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", vmID, err))
+			continue
 		}
 		n++
 	}
-	return n
+	return n, failures
 }
 
 // ---------------------------------------------------------------------------
@@ -430,9 +438,13 @@ func (a *API) projPorts(proj *types.Project) []types.Port {
 }
 
 func (a *API) handleRestartProject(w http.ResponseWriter, r *http.Request) {
-	n := a.mutateReplicas(a.projectID(r), nil, "restart")
+	n, failures := a.mutateReplicas(a.projectID(r), nil, "restart")
 	a.store.AppendDaemonLog(fmt.Sprintf("project %s restarted", a.projectID(r)))
-	writeJSON(w, http.StatusOK, map[string]any{"restarted": n})
+	status := http.StatusOK
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"restarted": n, "failed": failures})
 }
 
 // ---------------------------------------------------------------------------
@@ -897,13 +909,15 @@ func (a *API) handleListDeployments(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Image    string            `json:"image"`
-		Env      map[string]string `json:"env"`
-		Tag      string            `json:"tag"`
-		Commit   string            `json:"commit"`
-		GitURL   string            `json:"git_url"`
-		Rollout  string            `json:"rollout"` // canary | bluegreen | immediate
-		TrafficP int               `json:"traffic_pct"`
+		Image     string            `json:"image"`
+		Env       map[string]string `json:"env"`
+		Tag       string            `json:"tag"`
+		Commit    string            `json:"commit"`
+		GitURL    string            `json:"git_url"`
+		Rollout   string            `json:"rollout"` // canary | bluegreen | immediate
+		TrafficP  int               `json:"traffic_pct"`
+		Replicas  int               `json:"replicas"`
+		GuestBase string            `json:"guest_base"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -915,13 +929,29 @@ func (a *API) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Rollout == "" {
-		req.Rollout = "immediate"
+		req.Rollout = "preview"
 	}
-	if req.TrafficP <= 0 || req.TrafficP > 100 {
-		req.TrafficP = 100
+	if req.Replicas < 1 {
+		req.Replicas = proj.ReplicasDesired
+		if req.Replicas < 1 {
+			req.Replicas = 1
+		}
+	}
+	if req.TrafficP < 0 || req.TrafficP > 100 {
+		writeError(w, http.StatusBadRequest, "traffic_pct must be between 0 and 100")
+		return
 	}
 	if req.Tag == "" {
 		req.Tag = "rev-" + strings.ToLower(randHex(6))
+	}
+	defaultBase := "alpine"
+	if a.hostConfig != nil && a.hostConfig.GuestBaseDefault != "" {
+		defaultBase = a.hostConfig.GuestBaseDefault
+	}
+	base, baseErr := imagecatalog.ResolveGuestBase(req.GuestBase, defaultBase, nil)
+	if baseErr != nil {
+		writeError(w, http.StatusBadRequest, baseErr.Error())
+		return
 	}
 	// Each deployment carries a real preview URL it can be reached on before
 	// promotion. Cloud DNS maps <deployment>.<project>.preview.<baseDomain> →
@@ -936,16 +966,34 @@ func (a *API) handleCreateDeployment(w http.ResponseWriter, r *http.Request) {
 	d := &types.Deployment{
 		ID: store.NewID(), ProjectID: proj.ID,
 		BuildStatus: "preview", ImageDigest: req.Image,
-		Revision:   len(a.store.ListDeployments(proj.ID)) + 1,
-		RollbackTo: currentRollout(a.store.ListDeployments(proj.ID)),
-		GitURL:     req.GitURL, GitCommit: req.Commit,
-		CreatedAt: time.Now(),
+		Revision:     len(a.store.ListDeployments(proj.ID)) + 1,
+		VersionLabel: req.Tag, GuestBase: base.Reference, Environment: "preview", RouteWeight: req.TrafficP,
+
+		RolloutPercent: req.TrafficP,
+		RollbackTo:     currentRollout(a.store.ListDeployments(proj.ID)),
+		GitURL:         req.GitURL, GitCommit: req.Commit,
+		VMIDs: []string{}, CreatedAt: time.Now(),
 	}
 	if err := a.store.CreateDeployment(d); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	a.store.AppendBuildLog(proj.ID, fmt.Sprintf("deployment %s (rev %d, %s) → preview at %s", req.Tag, d.Revision, req.Image, preview))
+	deploymentReq := createProjectReq{Name: proj.Name + "-" + req.Tag, Image: req.Image, Replicas: req.Replicas, Env: req.Env, Ports: a.projPorts(proj), deployment: d}
+	if deploymentReq.Image == "" {
+		deploymentReq.Image = proj.Image
+	}
+	if !a.knownDirectImage(deploymentReq.Image) {
+		d.BuildStatus = "failed"
+		_ = a.store.CreateDeployment(d)
+		writeError(w, http.StatusUnprocessableEntity, "deployment image is not a registered direct Firecracker image")
+		return
+	}
+	for i := 0; i < req.Replicas; i++ {
+		a.bootReplica(proj, deploymentReq, i)
+	}
+	d.BuildStatus = "ready"
+	_ = a.store.CreateDeployment(d)
+	a.store.AppendBuildLog(proj.ID, fmt.Sprintf("deployment %s (rev %d, %s) → preview at %s", req.Tag, d.Revision, deploymentReq.Image, preview))
 	a.store.AppendDaemonLog(fmt.Sprintf("project %s deployment rev %d ready; preview %s", proj.Name, d.Revision, preview))
 	a.hub.Broadcast("deployment.created", map[string]any{"id": d.ID, "preview": preview, "image": req.Image})
 	writeJSON(w, http.StatusAccepted, map[string]any{"deployment": d, "preview_url": preview, "status": "preview"})
@@ -1154,33 +1202,51 @@ func (a *API) handlePromoteDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	keepOld := r.URL.Query().Get("keep_old") == "1"
-	// Phase 1: boot the new image pool as additional replicas (canary).
+	// The target deployment owns an isolated VM pool. Reuse it when it is
+	// already warm; otherwise boot a new pool tagged with the deployment.
 	old := append([]string{}, proj.VMIDs...)
 	proj.Image = targetDep.ImageDigest
 	if targetDep.GitURL != "" && proj.Image == "" {
 		proj.Image = targetDep.GitURL
 	}
-	spec := createProjectReq{Name: proj.Name, Image: proj.Image, Replicas: proj.ReplicasDesired, Env: proj.Env, Ports: a.projPorts(proj)}
-	for i := 0; i < proj.ReplicasDesired; i++ {
-		a.bootReplica(proj, spec, i)
+	if len(targetDep.VMIDs) == 0 {
+		spec := createProjectReq{Name: proj.Name + "-" + targetDep.VersionLabel, Image: proj.Image, Replicas: proj.ReplicasDesired, Env: proj.Env, Ports: a.projPorts(proj), deployment: targetDep}
+		for i := 0; i < proj.ReplicasDesired; i++ {
+			a.bootReplica(proj, spec, i)
+		}
 	}
-	// T.2: traffic is switched to the new pool by updating the project's image
-	// source; old replicas become retired (removed) unless keep_old keeps them
-	// attached as read-only members of the project.
+	proj.VMIDs = append([]string{}, targetDep.VMIDs...)
+	for _, d := range a.store.ListDeployments(proj.ID) {
+		d.IsProduction = d.ID == targetDep.ID
+		if d.ID == targetDep.ID {
+			d.Environment = "production"
+			d.RouteWeight = 100
+			d.RolloutPercent = 100
+			d.BuildStatus = "live"
+		} else if d.IsProduction {
+			d.RouteWeight = 0
+			d.IsProduction = false
+		}
+		_ = a.store.CreateDeployment(d)
+	}
+	// Stop only the previous production pool. Preview/canary deployments stay
+	// alive so they can continue receiving preview or weighted traffic.
 	if !keepOld {
 		for _, vid := range old {
 			if vm, vok := a.store.GetVM(vid); vok {
 				_ = a.vmm.Stop(context.Background(), vm)
 			}
 		}
-		// Move the retired VMIDs out of the active pool.
-		proj.VMIDs = proj.VMIDs[len(old):]
 		for _, vid := range old {
 			a.store.DeleteVM(vid)
 		}
 	}
 	a.store.PutProject(proj)
 	targetDep.BuildStatus = "live"
+	targetDep.IsProduction = true
+	targetDep.Environment = "production"
+	targetDep.RouteWeight = 100
+	targetDep.RolloutPercent = 100
 	_ = a.store.CreateDeployment(targetDep)
 	a.store.AppendDaemonLog(fmt.Sprintf("project %s promoted deployment %s (image %s); %d replica(s) live", proj.Name, targetDep.ID, proj.Image, len(proj.VMIDs)))
 	a.hub.Broadcast("deployment.promoted", map[string]any{"id": targetDep.ID, "image": proj.Image})
@@ -1325,28 +1391,48 @@ func (a *API) handleGetReplica(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleReplicaBatchStart(w http.ResponseWriter, r *http.Request) {
-	n := a.mutateReplicas(a.projectID(r), nil, "start")
-	writeJSON(w, http.StatusAccepted, map[string]any{"started": n})
+	n, failures := a.mutateReplicas(a.projectID(r), nil, "start")
+	status := http.StatusAccepted
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"started": n, "failed": failures})
 }
 
 func (a *API) handleReplicaBatchStop(w http.ResponseWriter, r *http.Request) {
-	n := a.mutateReplicas(a.projectID(r), nil, "stop")
-	writeJSON(w, http.StatusOK, map[string]any{"stopped": n})
+	n, failures := a.mutateReplicas(a.projectID(r), nil, "stop")
+	status := http.StatusOK
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"stopped": n, "failed": failures})
 }
 
 func (a *API) handleReplicaStart(w http.ResponseWriter, r *http.Request) {
-	n := a.mutateReplicas(a.projectID(r), idxFilterAt(replicaIndex(r)), "start")
-	writeJSON(w, http.StatusAccepted, map[string]any{"started": n == 1})
+	n, failures := a.mutateReplicas(a.projectID(r), idxFilterAt(replicaIndex(r)), "start")
+	status := http.StatusAccepted
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"started": n == 1, "failed": failures})
 }
 
 func (a *API) handleReplicaStop(w http.ResponseWriter, r *http.Request) {
-	n := a.mutateReplicas(a.projectID(r), idxFilterAt(replicaIndex(r)), "stop")
-	writeJSON(w, http.StatusOK, map[string]any{"stopped": n == 1})
+	n, failures := a.mutateReplicas(a.projectID(r), idxFilterAt(replicaIndex(r)), "stop")
+	status := http.StatusOK
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"stopped": n == 1, "failed": failures})
 }
 
 func (a *API) handleReplicaRestart(w http.ResponseWriter, r *http.Request) {
-	n := a.mutateReplicas(a.projectID(r), idxFilterAt(replicaIndex(r)), "restart")
-	writeJSON(w, http.StatusOK, map[string]any{"restarted": n == 1})
+	n, failures := a.mutateReplicas(a.projectID(r), idxFilterAt(replicaIndex(r)), "restart")
+	status := http.StatusOK
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"restarted": n == 1, "failed": failures})
 }
 
 // handleListAllVMs is the legacy global /vms list (flattened replica pool).
@@ -1422,8 +1508,12 @@ func (a *API) replicaActionByID(w http.ResponseWriter, r *http.Request, state st
 		writeError(w, http.StatusNotFound, "replica not found")
 		return
 	}
-	n := a.mutateReplicas(vm.ProjectID, idxFilterAt(vm.ReplicaIndex), state)
-	writeJSON(w, http.StatusAccepted, map[string]any{state + "ed": n == 1})
+	n, failures := a.mutateReplicas(vm.ProjectID, idxFilterAt(vm.ReplicaIndex), state)
+	status := http.StatusAccepted
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{state + "ed": n == 1, "failed": failures})
 }
 
 // handleGetService is the legacy /projects/{id}/services/{name} single-service
@@ -4126,9 +4216,13 @@ func (a *API) handlePoolDrain(w http.ResponseWriter, r *http.Request) {
 	// report how many were actually stopped.
 	projID := a.projectID(r)
 	a.store.PutProjectSettings(projID, "pool", map[string]any{"draining": true, "drained_at": time.Now().Format(time.RFC3339)})
-	n := a.mutateReplicas(projID, nil, "stop")
+	n, failures := a.mutateReplicas(projID, nil, "stop")
 	a.store.AppendDaemonLog(fmt.Sprintf("pool drained for project %s (%d replicas stopped)", projID, n))
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": "draining", "project_id": projID, "stopped": n})
+	status := http.StatusAccepted
+	if len(failures) > 0 && n == 0 {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, map[string]any{"status": "draining", "project_id": projID, "stopped": n, "failed": failures})
 }
 
 func (a *API) handleListProjectMembers(w http.ResponseWriter, r *http.Request) {
@@ -4343,4 +4437,179 @@ func unzipTo(src io.Reader, dest string) error {
 		rc.Close()
 	}
 	return nil
+}
+
+func (a *API) handleReplicaSnapshot(w http.ResponseWriter, r *http.Request) {
+	vmID := a.vmAtReplica(a.projectID(r), replicaIndex(r))
+	vm, ok := a.store.GetVM(vmID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "replica not found")
+		return
+	}
+	if a.vmm == nil {
+		writeError(w, http.StatusServiceUnavailable, "VM runtime is unavailable")
+		return
+	}
+	vm.SnapshotStatus = "creating"
+	vm.SnapshotError = ""
+	a.store.PutVM(vm)
+	info, err := a.vmm.Snapshot(r.Context(), vm)
+	if err != nil {
+		vm.SnapshotStatus = "failed"
+		vm.SnapshotError = err.Error()
+		a.store.PutVM(vm)
+		writeError(w, http.StatusConflict, "snapshot failed: "+err.Error())
+		return
+	}
+	vm.SnapshotPath = info.SnapshotPath
+	vm.SnapshotMemPath = info.MemoryPath
+	vm.SnapshotCreatedAt = &info.CreatedAt
+	vm.SnapshotStatus = "ready"
+	vm.SnapshotError = ""
+	a.store.PutVM(vm)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "replica": vm, "snapshot": info})
+}
+
+func (a *API) handleReplicaRestore(w http.ResponseWriter, r *http.Request) {
+	vmID := a.vmAtReplica(a.projectID(r), replicaIndex(r))
+	vm, ok := a.store.GetVM(vmID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "replica not found")
+		return
+	}
+	if vm.SnapshotPath == "" || vm.SnapshotMemPath == "" {
+		writeError(w, http.StatusConflict, "replica has no complete snapshot")
+		return
+	}
+	if a.vmm == nil {
+		writeError(w, http.StatusServiceUnavailable, "VM runtime is unavailable")
+		return
+	}
+	vm.SnapshotStatus = "restoring"
+	vm.SnapshotError = ""
+	a.store.PutVM(vm)
+	if err := a.vmm.Restore(r.Context(), vm); err != nil {
+		vm.SnapshotStatus = "failed"
+		vm.SnapshotError = err.Error()
+		vm.Crashed = true
+		a.store.PutVM(vm)
+		writeError(w, http.StatusConflict, "restore failed: "+err.Error())
+		return
+	}
+	vm.SnapshotStatus = "ready"
+	vm.SnapshotError = ""
+	vm.Crashed = false
+	a.store.PutVM(vm)
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "restored", "replica": vm})
+}
+
+func (a *API) handleReplicaSnapshotByID(w http.ResponseWriter, r *http.Request) {
+	vm, ok := a.store.GetVM(r.PathValue("replicaId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "replica not found")
+		return
+	}
+	a.handleReplicaSnapshotForVM(w, r, vm)
+}
+
+func (a *API) handleReplicaRestoreByID(w http.ResponseWriter, r *http.Request) {
+	vm, ok := a.store.GetVM(r.PathValue("replicaId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "replica not found")
+		return
+	}
+	a.handleReplicaRestoreForVM(w, r, vm)
+}
+
+func (a *API) handleReplicaSnapshotForVM(w http.ResponseWriter, r *http.Request, vm *types.VM) {
+	if a.vmm == nil {
+		writeError(w, http.StatusServiceUnavailable, "VM runtime is unavailable")
+		return
+	}
+	info, err := a.vmm.Snapshot(r.Context(), vm)
+	if err != nil {
+		writeError(w, http.StatusConflict, "snapshot failed: "+err.Error())
+		return
+	}
+	vm.SnapshotPath = info.SnapshotPath
+	vm.SnapshotMemPath = info.MemoryPath
+	vm.SnapshotCreatedAt = &info.CreatedAt
+	vm.SnapshotStatus = "ready"
+	vm.SnapshotError = ""
+	a.store.PutVM(vm)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "replica": vm, "snapshot": info})
+}
+
+func (a *API) handleReplicaRestoreForVM(w http.ResponseWriter, r *http.Request, vm *types.VM) {
+	if vm.SnapshotPath == "" || vm.SnapshotMemPath == "" {
+		writeError(w, http.StatusConflict, "replica has no complete snapshot")
+		return
+	}
+	if a.vmm == nil {
+		writeError(w, http.StatusServiceUnavailable, "VM runtime is unavailable")
+		return
+	}
+	if err := a.vmm.Restore(r.Context(), vm); err != nil {
+		vm.SnapshotStatus = "failed"
+		vm.SnapshotError = err.Error()
+		vm.Crashed = true
+		a.store.PutVM(vm)
+		writeError(w, http.StatusConflict, "restore failed: "+err.Error())
+		return
+	}
+	vm.SnapshotStatus = "ready"
+	vm.SnapshotError = ""
+	vm.Crashed = false
+	a.store.PutVM(vm)
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "restored", "replica": vm})
+}
+
+// handleListGuestBases returns the managed guest operating-system bases that
+// can host an OCI application filesystem inside a Firecracker microVM.
+func (a *API) handleListGuestBases(w http.ResponseWriter, r *http.Request) {
+	bases := imagecatalog.ManagedGuestBases()
+	for i := range bases {
+		bases[i].KernelPath = "configured-by-host"
+		bases[i].RootfsPath = "configured-by-host"
+		bases[i].AgentPath = "configured-by-host"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"default": "alpine",
+		"bases":   bases,
+		"custom":  map[string]any{"enabled": true, "requires": []string{"kernel_path", "rootfs_path", "guest_agent"}},
+	})
+}
+
+// handleDeleteDeployment stops and removes a non-production deployment pool.
+// Deployment tags are the retention boundary: deleting the tag releases the
+// replica VMs and the deployment record, while production must be promoted
+// elsewhere first.
+func (a *API) handleDeleteDeployment(w http.ResponseWriter, r *http.Request) {
+	projectID := a.projectID(r)
+	d, ok := a.store.GetDeployment(projectID, r.PathValue("deployId"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "deployment not found")
+		return
+	}
+	if d.IsProduction || d.Environment == "production" {
+		writeError(w, http.StatusConflict, "cannot delete the production deployment; promote another version first")
+		return
+	}
+	for _, vmID := range d.VMIDs {
+		if vm, vok := a.store.GetVM(vmID); vok {
+			if a.vmm != nil {
+				if err := a.vmm.Stop(context.Background(), vm); err != nil {
+					writeError(w, http.StatusConflict, "stop deployment VM "+vmID+": "+err.Error())
+					return
+				}
+			}
+			a.store.DeleteVM(vmID)
+		}
+	}
+	if err := a.store.DeleteDeployment(projectID, d.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.store.AppendDaemonLog(fmt.Sprintf("deployment %s removed from project %s", d.VersionLabel, projectID))
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "deployment": d.ID, "tag": d.VersionLabel})
 }

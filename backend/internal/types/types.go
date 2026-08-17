@@ -56,30 +56,41 @@ type Healthcheck struct {
 }
 
 type VM struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	ProjectID    string            `json:"project_id"`
-	ServiceName  string            `json:"service_name"`
-	State        string            `json:"state"`
-	HealthStatus string            `json:"health_status"`
-	ReplicaIndex int               `json:"replica_index"`
-	Image        string            `json:"image"`
-	RootfsPath   string            `json:"rootfs_path,omitempty"`
-	Kernel       string            `json:"kernel,omitempty"` // per-VM vmlinux (custom images); falls back to the shared kernel
-	ContainerID  string            `json:"container_id,omitempty"`
-	TaskID       string            `json:"task_id,omitempty"`
-	VCPUs        int               `json:"vcpus"`
-	MemMiB       int               `json:"mem_mib"`
-	IPAddress    string            `json:"ip_address"`
-	Ports        []Port            `json:"ports"`
-	Env          map[string]string `json:"env,omitempty"`
-	VolumeID     string            `json:"volume_id,omitempty"` // persistent volume attached as /dev/vdb
-	Healthcheck  *Healthcheck      `json:"healthcheck,omitempty"`
-	Restart      string            `json:"restart,omitempty"`
-	Error        string            `json:"error,omitempty"`
-	Crashed      bool              `json:"crashed,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	StartedAt    *time.Time        `json:"started_at,omitempty"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	ProjectID         string            `json:"project_id"`
+	ServiceName       string            `json:"service_name"`
+	State             string            `json:"state"`
+	HealthStatus      string            `json:"health_status"`
+	ReplicaIndex      int               `json:"replica_index"`
+	Image             string            `json:"image"`
+	RootfsPath        string            `json:"rootfs_path,omitempty"`
+	Kernel            string            `json:"kernel,omitempty"` // per-VM vmlinux (custom images); falls back to the shared kernel
+	ContainerID       string            `json:"container_id,omitempty"`
+	TaskID            string            `json:"task_id,omitempty"`
+	VCPUs             int               `json:"vcpus"`
+	MemMiB            int               `json:"mem_mib"`
+	IPAddress         string            `json:"ip_address"`
+	Ports             []Port            `json:"ports"`
+	Env               map[string]string `json:"env,omitempty"`
+	VolumeID          string            `json:"volume_id,omitempty"` // persistent volume attached as /dev/vdb
+	Healthcheck       *Healthcheck      `json:"healthcheck,omitempty"`
+	Restart           string            `json:"restart,omitempty"`
+	Error             string            `json:"error,omitempty"`
+	Crashed           bool              `json:"crashed,omitempty"`
+	SnapshotPath      string            `json:"snapshot_path,omitempty"`
+	SnapshotMemPath   string            `json:"snapshot_mem_path,omitempty"`
+	DeploymentID      string            `json:"deployment_id,omitempty"`
+	DeploymentVersion string            `json:"deployment_version,omitempty"`
+	DeploymentEnv     string            `json:"deployment_environment,omitempty"`
+	GuestBase         string            `json:"guest_base,omitempty"`
+	SnapshotStatus    string            `json:"snapshot_status,omitempty"` // none | creating | ready | restoring | failed
+	SnapshotError     string            `json:"snapshot_error,omitempty"`
+	SnapshotCreatedAt *time.Time        `json:"snapshot_created_at,omitempty"`
+	LastRecoveredAt   *time.Time        `json:"last_recovered_at,omitempty"`
+	RecoveryCount     int               `json:"recovery_count,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	StartedAt         *time.Time        `json:"started_at,omitempty"`
 }
 
 // ContainerPort returns the first declared container port (the port the app
@@ -285,13 +296,19 @@ type Deployment struct {
 	ID             string            `json:"id"`
 	ProjectID      string            `json:"project_id"`
 	Revision       int               `json:"revision"`
+	VersionLabel   string            `json:"version_label,omitempty"`
+	GuestBase      string            `json:"guest_base,omitempty"`
+	Environment    string            `json:"environment,omitempty"` // preview | staging | production
+	IsProduction   bool              `json:"is_production"`
+	RouteWeight    int               `json:"route_weight"` // percentage of production traffic
+	VMIDs          []string          `json:"vm_ids,omitempty"`
 	GitURL         string            `json:"git_url,omitempty"`
 	GitCommit      string            `json:"git_commit,omitempty"`
 	BuildStatus    string            `json:"build_status"`
 	ImageDigest    string            `json:"image_digest,omitempty"`
 	RollbackTo     string            `json:"rollback_to,omitempty"`
 	Checks         []DeploymentCheck `json:"checks,omitempty"`          // required checks gate promotion
-	RolloutPercent int               `json:"rollout_percent,omitempty"` // rolling weight (0-100)
+	RolloutPercent int               `json:"rollout_percent,omitempty"` // legacy alias for RouteWeight
 	CreatedAt      time.Time         `json:"created_at"`
 }
 

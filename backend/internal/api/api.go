@@ -40,11 +40,19 @@ const HeaderUserID = "X-Porter-User-Id"
 
 // VMRunner is the executor the API boots replicas through (the runtime's
 // VMManager, adapted by cmd/porter's vmEngine).
+type SnapshotInfo struct {
+	SnapshotPath string    `json:"snapshot_path"`
+	MemoryPath   string    `json:"memory_path"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type VMRunner interface {
 	Boot(ctx context.Context, vm *types.VM) error
 	Stop(ctx context.Context, vm *types.VM) error
 	Restart(ctx context.Context, vm *types.VM) error
 	Delete(ctx context.Context, vm *types.VM) error
+	Snapshot(ctx context.Context, vm *types.VM) (SnapshotInfo, error)
+	Restore(ctx context.Context, vm *types.VM) error
 }
 
 // Execer is reserved for a future guest-vsock agent. Direct Firecracker VMs do
@@ -91,18 +99,6 @@ type API struct {
 	rateLimit int
 	rateMu    sync.Mutex
 	rate      map[string]rateEntry
-
-	mu sync.Mutex
-	// In-process CRUD stores for settings-type endpoints (not persisted in v0.1).
-	settings     map[string]map[string]any // projectID -> section -> value
-	crons        map[string][]any
-	alerts       map[string][]any
-	drains       map[string][]any
-	redirects    map[string][]any
-	firewall     map[string][]any
-	environments map[string][]any
-	hooks        map[string][]any
-	volumes      map[string]any // volumeId -> any
 }
 
 // NewAPI wires the Control API.
@@ -119,15 +115,6 @@ func NewAPI(st *store.Store, hub *event.Hub, vmm VMRunner, net *netmgr.NetManage
 		logger:            log.New(log.Writer(), "api: ", log.LstdFlags),
 		csrfToken:         generateRandomToken(32),
 		rate:              map[string]rateEntry{},
-		settings:          map[string]map[string]any{},
-		crons:             map[string][]any{},
-		alerts:            map[string][]any{},
-		drains:            map[string][]any{},
-		redirects:         map[string][]any{},
-		firewall:          map[string][]any{},
-		environments:      map[string][]any{},
-		hooks:             map[string][]any{},
-		volumes:           map[string]any{},
 	}
 	return api
 }
@@ -472,6 +459,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/start", a.auth(a.handleReplicaStart))
 	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/stop", a.auth(a.handleReplicaStop))
 	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/restart", a.auth(a.handleReplicaRestart))
+	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/snapshot", a.auth(a.handleReplicaSnapshot))
+	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/restore", a.auth(a.handleReplicaRestore))
+	mux.HandleFunc("POST /projects/{projectId}/replicas/{n}/recover", a.auth(a.handleReplicaRestore))
 	mux.HandleFunc("DELETE /projects/{projectId}/replicas/{n}", a.auth(a.handleReplicaDelete))
 	mux.HandleFunc("GET /projects/{projectId}/replicas/{n}/logs", a.auth(a.handleReplicaLogs))
 	mux.HandleFunc("GET /projects/{projectId}/replicas/{n}/metrics", a.auth(a.handleReplicaMetrics))
@@ -494,6 +484,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/logs", a.auth(a.handleDeploymentLogs))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/{deployId}/promote", a.auth(a.handlePromoteDeployment))
 	mux.HandleFunc("POST /projects/{projectId}/deployments/{deployId}/rollback", a.auth(a.handleRollbackDeployment))
+	mux.HandleFunc("DELETE /projects/{projectId}/deployments/{deployId}", a.auth(a.handleDeleteDeployment))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/source", a.auth(a.handleDeploymentSource))
 	mux.HandleFunc("GET /projects/{projectId}/deployments/{deployId}/og", a.auth(a.handleDeploymentOG))
 
@@ -653,6 +644,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{projectId}/volumes/{volumeId}/usage", a.auth(a.handleVolumeUsage))
 
 	// ========== Images / Registry ==========
+	mux.HandleFunc("GET /guest-bases", a.auth(a.handleListGuestBases))
 	mux.HandleFunc("GET /images", a.auth(a.handleListImages))
 	mux.HandleFunc("GET /images/base", a.auth(a.handleBaseImage))
 	mux.HandleFunc("GET /images/base/readiness", a.auth(a.handleBaseImageReadiness))
@@ -674,6 +666,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /vms/{replicaId}/start", a.auth(a.handleReplicaStartByID))
 	mux.HandleFunc("POST /vms/{replicaId}/stop", a.auth(a.handleReplicaStopByID))
 	mux.HandleFunc("POST /vms/{replicaId}/restart", a.auth(a.handleReplicaRestartByID))
+	mux.HandleFunc("POST /vms/{replicaId}/snapshot", a.auth(a.handleReplicaSnapshotByID))
+	mux.HandleFunc("POST /vms/{replicaId}/restore", a.auth(a.handleReplicaRestoreByID))
+	mux.HandleFunc("POST /vms/{replicaId}/recover", a.auth(a.handleReplicaRestoreByID))
 	mux.HandleFunc("DELETE /vms/{replicaId}", a.auth(a.handleVMCompatDelete))
 	mux.HandleFunc("GET /vms/{replicaId}/domains", a.auth(a.handleVMCompatDomains))
 	mux.HandleFunc("GET /vms/{replicaId}/logs", a.auth(a.handleReplicaLogsByID))
@@ -893,6 +888,9 @@ var routePerms = map[string]string{
 	"POST /projects/{projectId}/replicas/{n}/start":                         "replica.start",
 	"POST /projects/{projectId}/replicas/{n}/stop":                          "replica.stop",
 	"POST /projects/{projectId}/replicas/{n}/restart":                       "replica.restart",
+	"POST /projects/{projectId}/replicas/{n}/snapshot":                      "replica.snapshot",
+	"POST /projects/{projectId}/replicas/{n}/restore":                       "replica.restore",
+	"POST /projects/{projectId}/replicas/{n}/recover":                       "replica.restore",
 	"DELETE /projects/{projectId}/replicas/{n}":                             "replica.delete",
 	"GET /projects/{projectId}/replicas/{n}/logs":                           "log.read",
 	"GET /projects/{projectId}/replicas/{n}/metrics":                        "metric.read",
@@ -913,6 +911,7 @@ var routePerms = map[string]string{
 	"PUT /projects/{projectId}/deployments/{deployId}/rollout":              "deployment.promote",
 	"POST /projects/{projectId}/deployments/{deployId}/promote":             "deployment.promote",
 	"POST /projects/{projectId}/deployments/{deployId}/rollback":            "deployment.rollback",
+	"DELETE /projects/{projectId}/deployments/{deployId}":                   "deployment.rollback",
 	"GET /projects/{projectId}/settings/general":                            "project.read",
 	"PATCH /projects/{projectId}/settings/general":                          "project.settings",
 	"GET /projects/{projectId}/settings/build":                              "project.read",
@@ -1032,40 +1031,45 @@ var routePerms = map[string]string{
 	"POST /projects/{projectId}/volumes/{volumeId}/resize": "volume.resize",
 	"GET /projects/{projectId}/volumes/{volumeId}/usage":   "volume.read",
 	// global observability / host / vms
-	"GET /global/analytics":                                   "analytics.read",
-	"GET /global/analytics/timeseries":                        "analytics.read",
-	"GET /usage":                                              "analytics.read",
-	"GET /usage/bandwidth":                                    "analytics.read",
-	"GET /usage/requests":                                     "analytics.read",
-	"GET /usage/timeseries":                                   "analytics.read",
-	"GET /replicas":                                           "replica.list",
-	"GET /replicas/{replicaId}":                               "replica.list",
-	"GET /overview":                                           "project.read",
-	"GET /host/overview":                                      "metric.read",
-	"GET /host/ports":                                         "metric.read",
-	"GET /host/kernel":                                        "metric.read",
-	"GET /host/prerequisites":                                 "metric.read",
-	"GET /host/runtime":                                       "metric.read",
-	"GET /logs":                                               "log.read",
-	"GET /traffic":                                            "traffic.read",
-	"DELETE /traffic":                                         "cache.purge",
-	"GET /traffic/search":                                     "traffic.read",
-	"GET /images":                                             "project.read",
-	"GET /images/base":                                        "project.read",
-	"GET /images/base/readiness":                              "project.read",
-	"GET /images/search":                                      "project.read",
-	"GET /images/ml":                                          "project.read",
-	"GET /images/stats":                                       "project.read",
-	"POST /images/custom":                                     "image.upload",
-	"POST /images/prune":                                      "cache.purge",
-	"GET /images/{reference}":                                 "project.read",
-	"DELETE /images/{reference}":                              "project.delete",
-	"GET /vms":                                                "replica.list",
-	"GET /vms/{replicaId}":                                    "replica.list",
-	"POST /vms/{replicaId}/start":                             "replica.start",
-	"POST /vms/{replicaId}/stop":                              "replica.stop",
-	"POST /vms/{replicaId}/restart":                           "replica.restart",
-	"DELETE /vms/{replicaId}":                                 "replica.delete",
+	"GET /global/analytics":            "analytics.read",
+	"GET /global/analytics/timeseries": "analytics.read",
+	"GET /usage":                       "analytics.read",
+	"GET /usage/bandwidth":             "analytics.read",
+	"GET /usage/requests":              "analytics.read",
+	"GET /usage/timeseries":            "analytics.read",
+	"GET /replicas":                    "replica.list",
+	"GET /replicas/{replicaId}":        "replica.list",
+	"GET /overview":                    "project.read",
+	"GET /host/overview":               "metric.read",
+	"GET /host/ports":                  "metric.read",
+	"GET /host/kernel":                 "metric.read",
+	"GET /host/prerequisites":          "metric.read",
+	"GET /host/runtime":                "metric.read",
+	"GET /logs":                        "log.read",
+	"GET /traffic":                     "traffic.read",
+	"DELETE /traffic":                  "cache.purge",
+	"GET /traffic/search":              "traffic.read",
+	"GET /guest-bases":                 "project.read",
+	"GET /images":                      "project.read",
+	"GET /images/base":                 "project.read",
+	"GET /images/base/readiness":       "project.read",
+	"GET /images/search":               "project.read",
+	"GET /images/ml":                   "project.read",
+	"GET /images/stats":                "project.read",
+	"POST /images/custom":              "image.upload",
+	"POST /images/prune":               "cache.purge",
+	"GET /images/{reference}":          "project.read",
+	"DELETE /images/{reference}":       "project.delete",
+	"GET /vms":                         "replica.list",
+	"GET /vms/{replicaId}":             "replica.list",
+	"POST /vms/{replicaId}/start":      "replica.start",
+	"POST /vms/{replicaId}/stop":       "replica.stop",
+	"POST /vms/{replicaId}/restart":    "replica.restart",
+	"POST /vms/{replicaId}/snapshot":   "replica.snapshot",
+	"POST /vms/{replicaId}/restore":    "replica.restore",
+	"POST /vms/{replicaId}/recover":    "replica.restore",
+	"DELETE /vms/{replicaId}":          "replica.delete",
+
 	"GET /vms/{replicaId}/domains":                            "domain.list",
 	"GET /vms/{replicaId}/logs":                               "log.read",
 	"GET /vms/{replicaId}/logs/stream":                        "log.read",
@@ -1428,7 +1432,8 @@ func (a *API) groupsAll() []*types.Group {
 // ----------------------------------------------------------------------------
 
 type createProjectReq struct {
-	Name          string             `json:"name"`
+	Name string `json:"name"`
+
 	Image         string             `json:"image"`
 	GitURL        string             `json:"git_url"`
 	Branch        string             `json:"branch"`
@@ -1445,6 +1450,7 @@ type createProjectReq struct {
 	Healthcheck   *types.Healthcheck `json:"healthcheck"`
 	RestartPolicy string             `json:"restart_policy"`
 	SSHEnabled    bool               `json:"ssh_enabled"`
+	deployment    *types.Deployment  // internal: isolated deployment VM pool owner
 }
 
 func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -1599,6 +1605,13 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		VolumeID:     req.VolumeID,
 		CreatedAt:    time.Now(),
 	}
+	if req.deployment != nil {
+		vm.DeploymentID = req.deployment.ID
+		vm.DeploymentVersion = req.deployment.VersionLabel
+		vm.DeploymentEnv = req.deployment.Environment
+		vm.GuestBase = req.deployment.GuestBase
+	}
+
 	a.applyImageManifest(vm)
 	if vm.Kernel == "" && a.hostConfig != nil {
 		vm.Kernel = a.hostConfig.KernelImage
@@ -1616,10 +1629,15 @@ func (a *API) bootReplica(proj *types.Project, req createProjectReq, idx int) {
 		return
 	}
 	a.store.PutVM(vm)
-	if proj.VMIDs == nil {
-		proj.VMIDs = []string{}
+	if req.deployment != nil {
+		req.deployment.VMIDs = append(req.deployment.VMIDs, vmID)
+		_ = a.store.CreateDeployment(req.deployment)
+	} else {
+		if proj.VMIDs == nil {
+			proj.VMIDs = []string{}
+		}
+		proj.VMIDs = append(proj.VMIDs, vmID)
 	}
-	proj.VMIDs = append(proj.VMIDs, vmID)
 	if a.vmm != nil {
 		go func(c types.VM) { _ = a.vmm.Boot(context.Background(), &c) }(*vm)
 	}

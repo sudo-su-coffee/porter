@@ -15,6 +15,7 @@ auto_migrate = true
 runtime_mode       = "direct"
 base_image_ref     = "base://default"
 api_socket_dir     = "/run/porter/firecracker"
+snapshot_dir       = "/var/lib/porter/snapshots"
 kernel_image       = "/var/lib/porter/vmlinux"
 rootfs_path        = "/var/lib/porter/rootfs.ext4"
 firecracker_bin    = "firecracker"

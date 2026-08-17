@@ -32,6 +32,12 @@ type Store interface {
 	AddTraffic(vmID string, e *types.TrafficEntry)
 }
 
+// deploymentStore is optional so older gateway test stores and integrations
+// remain valid while the production PostgreSQL store enables weighted routing.
+type deploymentStore interface {
+	ListDeployments(projectID string) []*types.Deployment
+}
+
 // DNSResolver resolves <svc>.<project>.local hostnames to VM IPs; wired from
 // the dns package when enabled.
 type DNSResolver interface {
@@ -115,9 +121,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no healthy backend for "+host, http.StatusServiceUnavailable)
 		return
 	}
-	// Round-robin across the healthy replica pool (least-connections can be
-	// layered on later; round-robin is correct and stateless).
-	vm := vms[int(g.rr.Add(1))%len(vms)]
+	// A deployment cookie keeps a user on one version for the duration of an
+	// experiment. Users without a cookie use the weighted pool.
+	var vm *types.VM
+	if cookie, err := r.Cookie("porter_deployment"); err == nil {
+		for _, candidate := range vms {
+			if candidate.DeploymentID == cookie.Value || candidate.DeploymentVersion == cookie.Value {
+				vm = candidate
+				break
+			}
+		}
+	}
+	if vm == nil {
+		vm = vms[int(g.rr.Add(1))%len(vms)]
+		if vm.DeploymentVersion != "" {
+			http.SetCookie(w, &http.Cookie{Name: "porter_deployment", Value: vm.DeploymentVersion, Path: "/", MaxAge: 86400, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		}
+	}
 
 	// Firewall: enforce the project's active deny rules before proxying.
 	if rule := g.blockedByFirewall(vm.ProjectID, r); rule != nil {
@@ -221,10 +241,11 @@ func (g *Gateway) backendsFor(host string) []*types.VM {
 		}
 		for _, d := range g.store.ListDomains(vm.ID) {
 			if strings.EqualFold(d.Domain, host) {
-				return []*types.VM{vm}
+				return g.weightedDeploymentBackends(vm.ProjectID, vm)
 			}
 		}
 	}
+
 	// <svc>.<project>.local — resolve through the attached dns resolver and
 	// pick the healthy VM whose IP matches.
 	if g.dns != nil && strings.HasSuffix(host, ".local") {
@@ -346,3 +367,44 @@ func itoa(i int) string {
 
 var _ = httputil.ReverseProxy{}
 var _ = url.URL{}
+
+// weightedDeploymentBackends returns healthy replicas grouped by deployment
+// route weight. It is intentionally bounded to 100 entries so a percentage
+// rollout cannot create unbounded per-request allocations.
+func (g *Gateway) weightedDeploymentBackends(projectID string, fallback *types.VM) []*types.VM {
+	ds, ok := g.store.(deploymentStore)
+	if !ok {
+		return []*types.VM{fallback}
+	}
+	deployments := ds.ListDeployments(projectID)
+	out := make([]*types.VM, 0, 16)
+	for _, d := range deployments {
+		weight := d.RouteWeight
+		if weight <= 0 {
+			weight = d.RolloutPercent
+		}
+		if weight <= 0 || d.BuildStatus == "failed" || len(d.VMIDs) == 0 {
+			continue
+		}
+		for _, vmID := range d.VMIDs {
+			vm, exists := g.store.GetVM(vmID)
+			if !exists || !isHealthy(vm) {
+				continue
+			}
+			repeats := weight / 10
+			if repeats < 1 {
+				repeats = 1
+			}
+			if repeats > 10 {
+				repeats = 10
+			}
+			for i := 0; i < repeats; i++ {
+				out = append(out, vm)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return []*types.VM{fallback}
+	}
+	return out
+}

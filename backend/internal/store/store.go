@@ -778,16 +778,23 @@ func (s *Store) TailBuildLogsFor(projectID, buildID string, n int) []string {
 }
 
 func (s *Store) CreateDeployment(d *types.Deployment) error {
+	if d.RouteWeight == 0 && d.RolloutPercent != 0 {
+		d.RouteWeight = d.RolloutPercent
+	}
 	if d.RolloutPercent == 0 {
-		d.RolloutPercent = 100
+		d.RolloutPercent = d.RouteWeight
 	}
 	checks, _ := json.Marshal(d.Checks)
 	if checks == nil {
 		checks = []byte("[]")
 	}
+	vmIDs, _ := json.Marshal(d.VMIDs)
+	if vmIDs == nil {
+		vmIDs = []byte("[]")
+	}
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO deployments (id, project_id, build_status, image_digest, rollback_to, git_url, git_commit, checks, rollout_percent, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+		INSERT INTO deployments (id, project_id, build_status, image_digest, rollback_to, git_url, git_commit, checks, rollout_percent, version_label, guest_base, environment, is_production, route_weight, vm_ids, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
 		ON CONFLICT (id) DO UPDATE SET
 			build_status    = EXCLUDED.build_status,
 			image_digest    = EXCLUDED.image_digest,
@@ -795,17 +802,26 @@ func (s *Store) CreateDeployment(d *types.Deployment) error {
 			git_url         = EXCLUDED.git_url,
 			git_commit      = EXCLUDED.git_commit,
 			checks          = EXCLUDED.checks,
-			rollout_percent = EXCLUDED.rollout_percent`,
+			rollout_percent = EXCLUDED.rollout_percent,
+			version_label   = EXCLUDED.version_label,
+			environment     = EXCLUDED.environment,
+			is_production   = EXCLUDED.is_production,
+			route_weight    = EXCLUDED.route_weight,
+			vm_ids          = EXCLUDED.vm_ids`,
 		d.ID, nullableStr(d.ProjectID), d.BuildStatus, nullableStr(d.ImageDigest),
 		nullableStr(d.RollbackTo), nullableStr(d.GitURL), nullableStr(d.GitCommit),
-		string(checks), d.RolloutPercent)
+		string(checks), d.RolloutPercent, nullableStr(d.VersionLabel), nullableStr(d.GuestBase),
+		nullableStr(d.Environment), d.IsProduction, d.RouteWeight, string(vmIDs))
+
 	return err
 }
 
 func (s *Store) ListDeployments(projectID string) []*types.Deployment {
 	rows, err := s.pool.Query(context.Background(), `
 		SELECT id, project_id, build_status, image_digest, COALESCE(rollback_to,''), git_url, git_commit,
-		       COALESCE(checks,'[]'::jsonb), COALESCE(rollout_percent,100), created_at FROM deployments
+		       COALESCE(checks,'[]'::jsonb), COALESCE(rollout_percent,100),
+		       COALESCE(version_label,''), COALESCE(guest_base,'alpine'), COALESCE(environment,'preview'), COALESCE(is_production,false),
+		       COALESCE(route_weight,0), COALESCE(vm_ids,'[]'::jsonb), created_at FROM deployments
 		WHERE project_id = $1 ORDER BY revision DESC`, projectID)
 	if err != nil {
 		log.Printf("store: list deployments for %s: %v", projectID, err)
@@ -816,14 +832,28 @@ func (s *Store) ListDeployments(projectID string) []*types.Deployment {
 	for rows.Next() {
 		var d types.Deployment
 		var checks []byte
+		var vmIDs []byte
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.BuildStatus, &d.ImageDigest,
-			&d.RollbackTo, &d.GitURL, &d.GitCommit, &checks, &d.RolloutPercent, &d.CreatedAt); err != nil {
+			&d.RollbackTo, &d.GitURL, &d.GitCommit, &checks, &d.RolloutPercent,
+			&d.VersionLabel, &d.GuestBase, &d.Environment, &d.IsProduction, &d.RouteWeight, &vmIDs, &d.CreatedAt); err != nil {
+
 			continue
 		}
 		_ = json.Unmarshal(checks, &d.Checks)
+		_ = json.Unmarshal(vmIDs, &d.VMIDs)
+		if d.RouteWeight == 0 {
+			d.RouteWeight = d.RolloutPercent
+		}
 		out = append(out, &d)
+
 	}
 	return out
+}
+
+// DeleteDeployment removes one deployment record after its VM pool has been stopped.
+func (s *Store) DeleteDeployment(projectID, id string) error {
+	_, err := s.pool.Exec(context.Background(), `DELETE FROM deployments WHERE project_id = $1 AND id = $2`, projectID, id)
+	return err
 }
 
 // GetDeployment returns one deployment by id within a project.

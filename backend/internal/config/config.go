@@ -27,6 +27,7 @@ type Config struct {
 	RuntimeMode          string // direct only
 	BaseImageRef         string // canonical default, e.g. base://default
 	FirecrackerSocketDir string // per-VM API sockets, e.g. /run/porter/firecracker
+	SnapshotDir          string // durable full snapshot files, e.g. /var/lib/porter/snapshots
 	LogsDir              string // per-VM Firecracker stdout/stderr logs
 
 	KernelImage    string // shared vmlinux (provision with `porter kernel set`)
@@ -38,7 +39,12 @@ type Config struct {
 
 	// Direct-Firecracker (bare microVM) settings. CustomImagesDir is where
 	// user-uploaded .zip microVM images (rootfs.ext4 + vmlinux) are unpacked.
-	CustomImagesDir string // e.g. "vms/custom"
+	CustomImagesDir  string // e.g. "vms/custom"
+	GuestBaseDefault string // alpine | debian | ubuntu | custom
+	GuestBasesDir    string // managed base manifests and rootfs artifacts
+	BuildKitAddr     string // BuildKit Unix socket or tcp endpoint
+	BuildKitBin      string // optional buildctl binary path
+	GuestAgentPath   string // Porter guest agent installed into managed bases
 
 	// RateLimitPerMin caps control-plane requests per client IP per minute
 	// (0 disables). Applied to auth'd routes as a token bucket.
@@ -114,19 +120,26 @@ func LoadConfig(path string) (*Config, error) {
 		RuntimeMode:          "direct",
 		BaseImageRef:         "base://default",
 		FirecrackerSocketDir: "/run/porter/firecracker",
+		SnapshotDir:          "/var/lib/porter/snapshots",
 		LogsDir:              "/var/log/porter",
 		ImagesDir:            "vms/images",
 		CustomImagesDir:      "vms/custom",
+		GuestBaseDefault:     "alpine",
+		GuestBasesDir:        "vms/bases",
+		BuildKitAddr:         "unix:///run/buildkit/buildkitd.sock",
+		BuildKitBin:          "buildctl",
+		GuestAgentPath:       "/usr/local/libexec/porter-guest-agent",
 		FirecrackerBin:       "firecracker",
-		GatewayListenAddr:    ":80",
-		SSHListenAddr:        ":2222",
-		CacheURL:             "redis://localhost:6379/0",
-		CacheTTLSeconds:      15,
-		VolumesDir:           "volumes",
-		SMTPPort:             587,
-		LogLevel:             "info",
-		OTelServiceName:      "porter-control-plane",
-		SentryEnvironment:    "development",
+
+		GatewayListenAddr: ":80",
+		SSHListenAddr:     ":2222",
+		CacheURL:          "redis://localhost:6379/0",
+		CacheTTLSeconds:   15,
+		VolumesDir:        "volumes",
+		SMTPPort:          587,
+		LogLevel:          "info",
+		OTelServiceName:   "porter-control-plane",
+		SentryEnvironment: "development",
 	}
 
 	data, err := os.ReadFile(path)
@@ -146,9 +159,17 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.RootfsPath = tomlGet(sections, "firecracker", "rootfs_path", cfg.RootfsPath)
 		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
 		cfg.FirecrackerSocketDir = tomlGet(sections, "firecracker", "api_socket_dir", cfg.FirecrackerSocketDir)
+		cfg.SnapshotDir = tomlGet(sections, "firecracker", "snapshot_dir", cfg.SnapshotDir)
 		cfg.LogsDir = tomlGet(sections, "firecracker", "logs_dir", cfg.LogsDir)
+
 		cfg.ImagesDir = tomlGet(sections, "firecracker", "images_dir", cfg.ImagesDir)
 		cfg.CustomImagesDir = tomlGet(sections, "firecracker", "custom_images_dir", cfg.CustomImagesDir)
+		cfg.GuestBaseDefault = tomlGet(sections, "build", "guest_base_default", cfg.GuestBaseDefault)
+		cfg.GuestBasesDir = tomlGet(sections, "build", "guest_bases_dir", cfg.GuestBasesDir)
+		cfg.BuildKitAddr = tomlGet(sections, "build", "buildkit_addr", cfg.BuildKitAddr)
+		cfg.BuildKitBin = tomlGet(sections, "build", "buildkit_bin", cfg.BuildKitBin)
+		cfg.GuestAgentPath = tomlGet(sections, "build", "guest_agent_path", cfg.GuestAgentPath)
+
 		cfg.FirecrackerBin = tomlGet(sections, "firecracker", "firecracker_bin", cfg.FirecrackerBin)
 		cfg.JailerBin = tomlGet(sections, "firecracker", "jailer_bin", cfg.JailerBin)
 		cfg.RateLimitPerMin = tomlInt(sections, "server", "rate_limit_per_min", cfg.RateLimitPerMin)
@@ -200,12 +221,19 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.RuntimeMode = envOr("PORTER_RUNTIME_MODE", cfg.RuntimeMode)
 	cfg.BaseImageRef = envOr("PORTER_BASE_IMAGE_REF", cfg.BaseImageRef)
 	cfg.FirecrackerSocketDir = envOr("PORTER_FIRECRACKER_API_SOCKET_DIR", cfg.FirecrackerSocketDir)
+	cfg.SnapshotDir = envOr("PORTER_FIRECRACKER_SNAPSHOT_DIR", cfg.SnapshotDir)
 	cfg.KernelImage = envOr("PORTER_KERNEL_IMAGE", cfg.KernelImage)
 	cfg.RootfsPath = envOr("PORTER_ROOTFS_PATH", cfg.RootfsPath)
 	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
 	cfg.LogsDir = envOr("PORTER_LOGS_DIR", cfg.LogsDir)
 	cfg.ImagesDir = envOr("PORTER_IMAGES_DIR", cfg.ImagesDir)
 	cfg.CustomImagesDir = envOr("PORTER_CUSTOM_IMAGES_DIR", cfg.CustomImagesDir)
+	cfg.GuestBaseDefault = envOr("PORTER_GUEST_BASE_DEFAULT", cfg.GuestBaseDefault)
+	cfg.GuestBasesDir = envOr("PORTER_GUEST_BASES_DIR", cfg.GuestBasesDir)
+	cfg.BuildKitAddr = envOr("PORTER_BUILDKIT_ADDR", cfg.BuildKitAddr)
+	cfg.BuildKitBin = envOr("PORTER_BUILDKIT_BIN", cfg.BuildKitBin)
+	cfg.GuestAgentPath = envOr("PORTER_GUEST_AGENT_PATH", cfg.GuestAgentPath)
+
 	cfg.FirecrackerBin = envOr("PORTER_FIRECRACKER_BIN", cfg.FirecrackerBin)
 	cfg.RateLimitPerMin = envInt("PORTER_RATE_LIMIT_PER_MIN", cfg.RateLimitPerMin)
 	cfg.GatewayEnabled = envBool("PORTER_GATEWAY_ENABLED", cfg.GatewayEnabled)

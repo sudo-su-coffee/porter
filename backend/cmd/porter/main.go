@@ -184,17 +184,37 @@ func runServer(args []string) int {
 		KernelImage:    cfg.KernelImage,
 		RootfsPath:     cfg.RootfsPath,
 		SocketDir:      cfg.FirecrackerSocketDir,
+		SnapshotDir:    cfg.SnapshotDir,
 		LogsDir:        cfg.LogsDir,
 	}, st, hub)
 	defer vmm.Close()
 
-	// Reconcile stale VMs from previous run.
+	// Reconcile stale VMs from the previous process. Restore durable snapshots
+	// through the official Firecracker Unix-socket API when available; VMs that
+	// have never been snapshotted remain failed and require an explicit start.
 	for _, vm := range st.ListVMs() {
-		if vm.State == types.StateBooting || vm.State == types.StateRunning {
-			vm.State = types.StateFailed
-			vm.Error = "host restarted while this VM was up — press Start to retry"
-			st.PutVM(vm)
+		if vm.State != types.StateBooting && vm.State != types.StateRunning {
+			continue
 		}
+		if vm.SnapshotStatus == "ready" && vm.SnapshotPath != "" && vm.SnapshotMemPath != "" {
+			vm.SnapshotStatus = "restoring"
+			st.PutVM(vm)
+			if err := vmm.Restore(context.Background(), vm); err == nil {
+				vm.SnapshotStatus = "ready"
+				vm.SnapshotError = ""
+				vm.Crashed = false
+				st.PutVM(vm)
+				continue
+			} else {
+				vm.SnapshotError = err.Error()
+			}
+		}
+		vm.State = types.StateFailed
+		vm.Crashed = true
+		if vm.Error == "" {
+			vm.Error = "host restarted while this VM was up and no usable snapshot was available"
+		}
+		st.PutVM(vm)
 	}
 
 	netMgr := netmgr.NewNetManager()
@@ -497,6 +517,18 @@ func (e *vmEngine) Restart(ctx context.Context, vm *types.VM) error {
 
 func (e *vmEngine) Delete(ctx context.Context, vm *types.VM) error {
 	return e.Stop(ctx, vm)
+}
+
+func (e *vmEngine) Snapshot(ctx context.Context, vm *types.VM) (api.SnapshotInfo, error) {
+	result, err := e.rt.Snapshot(ctx, vm)
+	if err != nil {
+		return api.SnapshotInfo{}, err
+	}
+	return api.SnapshotInfo{SnapshotPath: result.SnapshotPath, MemoryPath: result.MemoryPath, CreatedAt: result.CreatedAt}, nil
+}
+
+func (e *vmEngine) Restore(ctx context.Context, vm *types.VM) error {
+	return e.rt.Restore(ctx, vm, vm.SnapshotPath, vm.SnapshotMemPath)
 }
 
 // Exec satisfies sshgw.Execer with the current direct-runtime limitation.

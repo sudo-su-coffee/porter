@@ -59,3 +59,18 @@ The runtime tests use a temporary Unix socket HTTP server to verify Firecracker 
 ## References
 
 1. [Firecracker official getting-started guide](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
+
+## Porter guest-agent contract
+
+Managed guest bases must include the versioned Porter guest-agent contract `porter.guest.v1`. The control plane may request only `status`, `health`, `drain`, and `shutdown` through the guest channel. A status response includes the guest boot ID, lifecycle state, readiness, health, application port, resource metrics, and timestamp.
+
+The agent channel is not a host shell. It must authenticate or be bound to the VM identity, enforce request correlation, apply deadlines, and reject unknown actions. Arbitrary command execution remains a separate reviewed capability and must not be enabled merely because a VM is reachable.
+
+The required lifecycle is:
+
+```text
+booting -> ready -> draining -> stopped
+       \\-> failed
+```
+
+Porter must wait for both Firecracker `InstanceStart` success and guest-agent readiness before routing traffic or marking a deployment healthy. During a rolling update, the new pool must become ready before the old pool receives a drain request. During crash recovery, the recovered VM must report a new boot ID and healthy status before it replaces the failed replica.

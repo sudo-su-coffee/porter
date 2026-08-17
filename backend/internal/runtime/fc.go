@@ -90,3 +90,53 @@ func (c *fcClient) InstanceStart(ctx context.Context) error {
 		ActionType string `json:"action_type"`
 	}{"InstanceStart"})
 }
+
+func (c *fcClient) SetState(ctx context.Context, state string) error {
+	return c.patch(ctx, "/vm", struct {
+		State string `json:"state"`
+	}{state})
+}
+
+func (c *fcClient) CreateSnapshot(ctx context.Context, snapshotPath, memFilePath string) error {
+	return c.put(ctx, "/snapshot/create", struct {
+		SnapshotType string `json:"snapshot_type"`
+		SnapshotPath string `json:"snapshot_path"`
+		MemFilePath  string `json:"mem_file_path"`
+	}{"Full", snapshotPath, memFilePath})
+}
+
+func (c *fcClient) LoadSnapshot(ctx context.Context, snapshotPath, memFilePath string, resumeVM bool) error {
+	return c.put(ctx, "/snapshot/load", struct {
+		SnapshotPath string `json:"snapshot_path"`
+		MemBackend   struct {
+			BackendPath string `json:"backend_path"`
+			BackendType string `json:"backend_type"`
+		} `json:"mem_backend"`
+		TrackDirtyPages bool `json:"track_dirty_pages"`
+		ResumeVM        bool `json:"resume_vm"`
+	}{SnapshotPath: snapshotPath, MemBackend: struct {
+		BackendPath string `json:"backend_path"`
+		BackendType string `json:"backend_type"`
+	}{BackendPath: memFilePath, BackendType: "File"}, ResumeVM: resumeVM})
+}
+
+func (c *fcClient) patch(ctx context.Context, path string, body any) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", path, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, "http://localhost"+path, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("PATCH %s over unix socket %s: %w", path, c.sock, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("PATCH %s: %s", path, resp.Status)
+	}
+	return nil
+}

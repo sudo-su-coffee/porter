@@ -95,6 +95,13 @@ Routes are registered in `internal/api/api.go` and implemented in
 session or scoped API key, the CSRF token from `GET /csrf`, and the selected
 `X-Porter-Org-Id` organization context.
 
+For a live host acceptance check, run `scripts/backend/curl-smoke.sh` with
+`PORTER_PASSWORD`, `PORTER_PROJECT_ID`, and optionally `PORTER_URL`,
+`PORTER_USERNAME`, `PORTER_REPLICA_INDEX`, and `PORTER_ORG_ID`. The script checks
+health, PostgreSQL readiness, login, CSRF, project discovery, start, stop, and
+final VM state. Snapshot create/restore commands are printed but intentionally
+opt-in because they pause a running VM.
+
 Important stream routes are:
 
 ```text
@@ -152,3 +159,11 @@ go build ./cmd/porter
 Integration smoke tests require PostgreSQL, Linux KVM, TAP privileges, the
 official Firecracker binary, and a real base bundle. Unit tests do not fabricate
 guest artifacts or customer data.
+
+## Managed guest bases and Docker/OCI deployments
+
+The feature branch exposes `GET /guest-bases` for the deployment UI and CLI. Porter defaults to `alpine`, with `debian` and `ubuntu` available for applications that need broader `glibc` compatibility. Advanced users may select a registered `custom://...` base only when it provides a valid Firecracker kernel, ext4 rootfs, and Porter guest-agent contract.
+
+A deployment request may include `guest_base`, such as `alpine`, `debian`, `ubuntu`, or `custom://my-base-v2`. The selected base is persisted with the immutable deployment revision and is reused during promotion, rollback, and recovery.
+
+BuildKit is the intended Dockerfile/OCI build engine. It may run as a local Unix-socket service or inside an isolated build microVM; Docker is not used as the application runtime. A completed build must be converted into a validated Firecracker artifact pair (`vmlinux` and `rootfs.ext4`) before the deployment can be marked ready. The API must never report an OCI layout as a bootable microVM until conversion and guest-agent validation succeed.

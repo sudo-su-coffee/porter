@@ -4,7 +4,7 @@
 
 Porter is a Go control plane and Vue 3 operator dashboard for running applications as kernel-isolated Firecracker microVM replicas on a Linux host. The repository is organized around two workstreams: **Backend** and **Frontend**.
 
-Porter v1.0.0-beta-dev uses the official Firecracker HTTP API over one Unix-domain socket per replica. It does **not** use containerd, firecracker-containerd, a Docker daemon, an OCI runtime, or a Docker socket as its VM control path.
+Porter v1.0.0-beta-dev uses the official Firecracker HTTP API over one Unix-domain socket per replica. The backend configures boot, drives, networking, machine resources, lifecycle actions, and snapshot operations through that socket. It does **not** use containerd, firecracker-containerd, a Docker daemon, an OCI runtime, or a Docker socket as its VM control path.
 
 ## Workstreams
 
@@ -33,6 +33,26 @@ rootfs.ext4   # bootable ext4 guest filesystem
 Docker or OCI image references are not bootable Firecracker guests. The current Git flow clones a repository and accepts it only when it contains validated `vmlinux` and `rootfs.ext4` artifacts. Dockerfile/Compose-to-guest BuildKit conversion remains a separate reviewed worker and is not represented as complete in the dashboard.
 
 Firecracker binaries are pinned to official GitHub releases and verified by SHA-256. Guest artifacts are separate from the Firecracker binary and are never fetched from AWS or an arbitrary mirror. Read the operational artifact policy in [`docs/backend/FIRECRACKER_ARTIFACTS.md`](docs/backend/FIRECRACKER_ARTIFACTS.md) and the distribution policy in [`docs/backend/GITHUB_ARTIFACTS.md`](docs/backend/GITHUB_ARTIFACTS.md).
+
+## Direct Firecracker API and snapshots
+
+Porter starts one official Firecracker VMM process per replica with `--api-sock` and sends HTTP requests through the per-replica Unix socket. The backend uses the same API boundary for the complete supported lifecycle: boot-source configuration, root and data drives, TAP-backed networking, machine configuration, instance start, pause/resume, and full snapshot create/load operations. No Firecracker Go SDK or firecracker-containerd dependency is required in the backend.
+
+Snapshot creation uses Firecracker’s native `PUT /snapshot/create` endpoint after pausing the VM. Restore uses `PUT /snapshot/load` with the matching VM state and memory files; Firecracker memory-maps the memory file and loads pages on demand. Snapshot files must remain available for the lifetime of the restored VM, and the kernel, vCPU, memory, device, and host configuration must be compatible. The backend persists the snapshot paths and status in the replica record under the configured `snapshot_dir` (default `/var/lib/porter/snapshots`).
+
+The real control-plane routes are:
+
+| Operation | Route |
+|---|---|
+| Create a full snapshot | `POST /projects/{projectId}/replicas/{n}/snapshot` |
+| Restore a saved snapshot | `POST /projects/{projectId}/replicas/{n}/restore` |
+| Recover a failed replica from its snapshot | `POST /projects/{projectId}/replicas/{n}/recover` |
+
+Equivalent legacy `/vms/{replicaId}/snapshot`, `/restore`, and `/recover` routes are also available. If a Firecracker process exits unexpectedly, Porter attempts bounded automatic recovery from a ready snapshot; a host restart attempts the same recovery during startup. Replicas without a usable snapshot are marked failed rather than silently reported as running.
+
+Our current performance targets are approximately **30 ms for restoring a local snapshot** and approximately **200 ms for starting a new image/pod**. These are measured or target values for the direct-socket path, not universal Firecracker guarantees; report p50 and p95 from the deployment host when publishing benchmarks.
+
+The direct API boundary is implemented in [`backend/internal/runtime/fc.go`](backend/internal/runtime/fc.go). The official snapshot API reference is the [Firecracker snapshot support guide](https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md).
 
 ## Quickstart
 

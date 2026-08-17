@@ -29,6 +29,7 @@ type FCConfig struct {
 	KernelImage    string
 	RootfsPath     string
 	SocketDir      string
+	SnapshotDir    string
 	LogsDir        string
 }
 
@@ -57,6 +58,9 @@ func NewVMManager(cfg FCConfig, st *store.Store, hub *event.Hub) *VMManager {
 	}
 	if cfg.SocketDir == "" {
 		cfg.SocketDir = "/run/porter/firecracker"
+	}
+	if cfg.SnapshotDir == "" {
+		cfg.SnapshotDir = "/var/lib/porter/snapshots"
 	}
 	if cfg.LogsDir == "" {
 		cfg.LogsDir = "/var/log/porter"
@@ -234,7 +238,17 @@ func (m *VMManager) bootDirect(vm *types.VM, spec netmgr.BootSpec) {
 		m.setState(vm, types.StateStopped, "")
 		return
 	}
+	vm.Crashed = true
 	m.setState(vm, types.StateFailed, fmt.Sprintf("Firecracker exited: %v", exitErr))
+	if vm.SnapshotStatus == "ready" && vm.SnapshotPath != "" && vm.SnapshotMemPath != "" && vm.RecoveryCount < 3 {
+		go func() {
+			if err := m.Restore(context.Background(), vm, vm.SnapshotPath, vm.SnapshotMemPath); err != nil {
+				vm.SnapshotStatus = "failed"
+				vm.SnapshotError = err.Error()
+				m.setState(vm, types.StateFailed, "automatic snapshot recovery failed: "+err.Error())
+			}
+		}()
+	}
 }
 
 func (m *VMManager) failDirect(vm *types.VM, rv *runningVM, msg string) {
@@ -356,4 +370,142 @@ func probeHealth(vm *types.VM, hc *types.Healthcheck) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// SnapshotPaths returns the durable state and guest-memory files for a VM.
+func (m *VMManager) SnapshotPaths(vmID string) (string, string) {
+	base := filepath.Join(m.cfg.SnapshotDir, "porter-"+safeVMID(vmID))
+	return base + ".state", base + ".mem"
+}
+
+// Snapshot pauses a running VM, writes a full Firecracker snapshot through the
+// official Unix-socket API, and resumes the VM before returning. The files are
+// durable host artifacts and are safe to reference during a later restore.
+func (m *VMManager) Snapshot(ctx context.Context, vm *types.VM) (SnapshotResult, error) {
+	if vm == nil {
+		return SnapshotResult{}, fmt.Errorf("snapshot: nil vm")
+	}
+	m.mu.Lock()
+	rv, ok := m.vms[vm.ID]
+	m.mu.Unlock()
+	if !ok || rv == nil {
+		return SnapshotResult{}, fmt.Errorf("snapshot vm=%s: VM is not running", vm.ID)
+	}
+	if err := os.MkdirAll(m.cfg.SnapshotDir, 0o750); err != nil {
+		return SnapshotResult{}, fmt.Errorf("snapshot vm=%s: create snapshot directory: %w", vm.ID, err)
+	}
+	snapshotPath, memPath := m.SnapshotPaths(vm.ID)
+	if vm.SnapshotPath != "" {
+		snapshotPath = vm.SnapshotPath
+	}
+	if vm.SnapshotMemPath != "" {
+		memPath = vm.SnapshotMemPath
+	}
+	client := newFCClient(rv.sockPath)
+	if err := client.SetState(ctx, "Paused"); err != nil {
+		return SnapshotResult{}, &OperationError{Operation: "pause-for-snapshot", VMID: vm.ID, Err: err}
+	}
+	resumed := false
+	defer func() {
+		if !resumed {
+			_ = client.SetState(context.Background(), "Resumed")
+		}
+	}()
+	if err := client.CreateSnapshot(ctx, snapshotPath, memPath); err != nil {
+		return SnapshotResult{}, &OperationError{Operation: "create-snapshot", VMID: vm.ID, Err: err}
+	}
+	if err := client.SetState(ctx, "Resumed"); err != nil {
+		return SnapshotResult{}, &OperationError{Operation: "resume-after-snapshot", VMID: vm.ID, Err: err}
+	}
+	resumed = true
+	return SnapshotResult{SnapshotPath: snapshotPath, MemoryPath: memPath, CreatedAt: time.Now().UTC()}, nil
+}
+
+// Restore loads a full Firecracker snapshot in a new VMM process through the
+// official Unix-socket API. The snapshot is resumed in place, so no kernel
+// boot or rootfs reconfiguration is performed on the restore path.
+func (m *VMManager) Restore(ctx context.Context, vm *types.VM, snapshotPath, memPath string) error {
+	if vm == nil {
+		return fmt.Errorf("restore: nil vm")
+	}
+	if snapshotPath == "" || memPath == "" {
+		snapshotPath, memPath = m.SnapshotPaths(vm.ID)
+	}
+	for name, path := range map[string]string{"snapshot": snapshotPath, "memory": memPath} {
+		if _, err := os.Stat(path); err != nil {
+			return &OperationError{Operation: "restore", VMID: vm.ID, Err: fmt.Errorf("%s file %q: %w", name, path, err)}
+		}
+	}
+	m.mu.Lock()
+	old := m.vms[vm.ID]
+	if old != nil {
+		delete(m.vms, vm.ID)
+	}
+	m.mu.Unlock()
+	if old != nil {
+		m.terminateVM(old)
+	}
+	if err := os.MkdirAll(m.cfg.SocketDir, 0o750); err != nil {
+		return &OperationError{Operation: "restore", VMID: vm.ID, Err: err}
+	}
+	sockPath := socketPath(m.cfg.SocketDir, vm.ID)
+	_ = removeSocket(sockPath)
+	logPath := filepath.Join(m.cfg.LogsDir, "porter-"+safeVMID(vm.ID)+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return &OperationError{Operation: "restore", VMID: vm.ID, Err: err}
+	}
+	cmd := exec.CommandContext(ctx, m.cfg.FirecrackerBin, "--api-sock", sockPath)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		return &OperationError{Operation: "restore", VMID: vm.ID, Err: err}
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	rv := &runningVM{cmd: cmd, sockPath: sockPath, cancel: cancel}
+	m.mu.Lock()
+	m.vms[vm.ID] = rv
+	m.mu.Unlock()
+	readyCtx, readyCancel := context.WithTimeout(runCtx, 5*time.Second)
+	err = waitForSocket(readyCtx, sockPath)
+	readyCancel()
+	if err != nil {
+		m.failDirect(vm, rv, fmt.Sprintf("restore socket %s was not ready: %v", sockPath, err))
+		return &OperationError{Operation: "restore", VMID: vm.ID, Err: err}
+	}
+	if err := newFCClient(sockPath).LoadSnapshot(ctx, snapshotPath, memPath, true); err != nil {
+		m.failDirect(vm, rv, fmt.Sprintf("load snapshot: %v", err))
+		return &OperationError{Operation: "load-snapshot", VMID: vm.ID, Err: err}
+	}
+	vm.SnapshotPath = snapshotPath
+	vm.SnapshotMemPath = memPath
+	vm.Crashed = false
+	vm.Error = ""
+	now := time.Now().UTC()
+	vm.LastRecoveredAt = &now
+	vm.RecoveryCount++
+	m.setState(vm, types.StateRunning, "")
+	go func() {
+		exitErr := cmd.Wait()
+		_ = logFile.Close()
+		m.mu.Lock()
+		_, tracked := m.vms[vm.ID]
+		if tracked {
+			delete(m.vms, vm.ID)
+		}
+		m.mu.Unlock()
+		_ = removeSocket(sockPath)
+		if tracked && exitErr != nil {
+			vm.Crashed = true
+			m.setState(vm, types.StateFailed, fmt.Sprintf("restored Firecracker exited: %v", exitErr))
+		}
+	}()
+	return nil
+}
+
+type SnapshotResult struct {
+	SnapshotPath string
+	MemoryPath   string
+	CreatedAt    time.Time
 }

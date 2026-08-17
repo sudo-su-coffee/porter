@@ -56,6 +56,10 @@ base_image_ref = "base://default"
 api_socket_dir = "/run/porter/firecracker"
 #   Override: PORTER_FIRECRACKER_API_SOCKET_DIR
 
+# snapshot_dir — durable full snapshot state and guest-memory files.
+snapshot_dir = "/var/lib/porter/snapshots"
+#   Override: PORTER_FIRECRACKER_SNAPSHOT_DIR
+
 # kernel_image — shared microkernel (vmlinux) for every microVM.
 # Provision it with `porter kernel set <path|URL>`.
 kernel_image = "/var/lib/porter/vmlinux"

@@ -22,9 +22,11 @@ esac
 
 mkdir -p "$DEST_DIR"
 TARGET="$DEST_DIR/firecracker-$VERSION-$ARCH"
-if [ -x "$TARGET" ] && printf '%s  %s\n' "$EXPECTED" "$TARGET" | sha256sum -c - >/dev/null 2>&1; then
+JAILER_TARGET="$DEST_DIR/jailer-$VERSION-$ARCH"
+if [ -x "$TARGET" ] && [ -x "$JAILER_TARGET" ] && printf '%s  %s\n' "$EXPECTED" "$TARGET" | sha256sum -c - >/dev/null 2>&1; then
   ln -sfn "$(basename "$TARGET")" "$DEST_DIR/firecracker"
-  echo "Firecracker $VERSION/$ARCH already verified at $TARGET"
+  ln -sfn "$(basename "$JAILER_TARGET")" "$DEST_DIR/jailer"
+  echo "Firecracker and jailer $VERSION/$ARCH already verified in $DEST_DIR"
   exit 0
 fi
 
@@ -38,7 +40,13 @@ tar -xzf "$ARCHIVE" -C "$TMP_DIR"
 SOURCE="$TMP_DIR/firecracker-${VERSION}-${ARCH}"
 [ -f "$SOURCE" ] || SOURCE="$(find "$TMP_DIR" -type f -name "firecracker-${VERSION}-${ARCH}" ! -name '*.debug' | head -1)"
 [ -n "$SOURCE" ] && [ -f "$SOURCE" ] || { echo "Firecracker binary missing from verified archive" >&2; exit 1; }
+JAILER_SOURCE="$TMP_DIR/jailer-${VERSION}-${ARCH}"
+[ -f "$JAILER_SOURCE" ] || JAILER_SOURCE="$(find "$TMP_DIR" -type f -name "jailer-${VERSION}-${ARCH}" ! -name '*.debug' | head -1)"
+[ -n "$JAILER_SOURCE" ] && [ -f "$JAILER_SOURCE" ] || { echo "jailer binary missing from verified archive" >&2; exit 1; }
 install -m 0755 "$SOURCE" "$TARGET"
+install -m 0755 "$JAILER_SOURCE" "$JAILER_TARGET"
 printf '%s  %s\n' "$EXPECTED" "$TARGET" > "$TARGET.sha256"
+printf '%s  %s\n' "$EXPECTED" "$JAILER_TARGET" > "$JAILER_TARGET.sha256"
 ln -sfn "$(basename "$TARGET")" "$DEST_DIR/firecracker"
-echo "Installed verified Firecracker $VERSION/$ARCH at $TARGET"
+ln -sfn "$(basename "$JAILER_TARGET")" "$DEST_DIR/jailer"
+echo "Installed verified Firecracker and jailer $VERSION/$ARCH in $DEST_DIR"

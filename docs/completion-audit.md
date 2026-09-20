@@ -247,3 +247,41 @@ STILL OPEN:
   pre-existing Windows-only `TestFCClientUsesUnixSocketAndOfficialPayload`.
   Route coverage test enforces every route mapped; controllers registered in
   runServer; migrations 0001-0022 run on boot.
+
+## 16. Ninth run (2026-09-20) — live WSL verification + MVP gap closure
+
+Evidence tags: **[WSL]** = reported by owner from live run on WSL Ubuntu 24.04 + PG16
+(not re-run by the authoring agent); **[SANDBOX]** = executed by the agent, no KVM/PG/network.
+
+- **[WSL]** `go build`/`go vet` green; `go test ./...` green on Linux incl. unix-socket FC tests.
+- **[WSL]** Migrations 0001-0025 apply clean. Fixed: UTF-8 BOM in 0019.
+- **[WSL]** Server boots with KVM + firecracker v1.16.1 + controllers. Fixed: gateway `:80`
+  bind failure was fatal to the whole control plane; now degrades gracefully (gateway/DNS).
+- **[WSL]** Auth (login/JWT/sessions/API keys), 2-role model (`admin`/`member`, DB-driven, no
+  hardcoded roles), membership gates: 12/12 live matrix (outsider isolation, creator
+  ownership, personal teams, sharing verbs).
+- **[WSL]** Catalog reads: `/images`, `/images/base`, `/images/base/readiness` (sha256), `/guest-bases`.
+- **[WSL]** Real FC boot of provided artifacts (Alpine 3.8, kernel 4.14, login prompt, sshd) via
+  the official API chain. Manual/userns; not yet driven through Porter (item 26).
+- **[WSL]** GitHub sample -> buildx OCI tar -> `ConvertOCIToExt4` -> 256 MB rootfs -> digest-pinned
+  deployment row. Fixed: OCI first-entry assumption in `unpackOCI`; `ListDeployments` uuid
+  `COALESCE` + NULL-scan bug + empty-ID guard.
+- **[WSL]** `tests/api_acceptance_test.go` (public / RBAC matrix / catalog) green against live server.
+- **[SANDBOX]** TODO #15 code: `buildkit.BuildInitScript`/`InstallInit` generate `/sbin/init`
+  from the OCI config (ENV, WORKDIR, ENTRYPOINT+CMD) and `ConvertOCIToExt4` installs it before
+  `mkfs.ext4`. 4 unit tests pass in an isolated stdlib-only module (quoting/injection safety,
+  env-name filtering, symlink-not-written-through). **Not** compiled inside the full package
+  (module deps unreachable from sandbox) and **not** boot-tested.
+- **[SANDBOX]** TODO #31: `scripts/gen_postman.py` generates
+  `docs/postman/porter.postman_collection.json` from `apiRoutes` (321 routes + bootstrap +
+  10 RBAC negatives). Collection loads in newman; bootstrap (login -> CSRF chaining) and RBAC
+  negative folder pass 13/13 against a *contract stub*, not the real server.
+
+### Known limits / not yet proven
+- Converted images with no `/bin/sh` (distroless/scratch) cannot use the shell shim; need a
+  static init. Images with neither ENTRYPOINT nor CMD keep their own `/sbin/init`.
+- **Boot of a converted Docker image is unproven** (needs KVM host). Closes TODO #14/#15 only
+  after node:alpine / python:slim / nginx:alpine each boot and serve.
+- Full-collection run against the live server not yet done; expect failures on routes whose
+  path variables (`projectId`, `roleId`, ...) are unset. Only 5xx are asserted as bugs.
+- Still open for MVP: #13 custom upload boot, #10 one Debian rootfs, #26 Porter-driven root boot.

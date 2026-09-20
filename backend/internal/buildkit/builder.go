@@ -171,6 +171,15 @@ func ConvertOCIToExt4(ctx context.Context, ociPath, rootfsPath string, sizeMiB i
 	if err := unpackOCI(ociPath, root); err != nil {
 		return Result{}, err
 	}
+	cfg, cfgErr := readOCIConfig(ociPath)
+	if cfgErr == nil {
+		// Images without ENTRYPOINT/CMD (plain OS bases) keep their own /sbin/init.
+		if script, err := BuildInitScript(cfg.Config.Entrypoint, cfg.Config.Cmd, cfg.Config.Env, cfg.Config.WorkingDir); err == nil {
+			if err := InstallInit(root, script); err != nil {
+				return Result{}, fmt.Errorf("install init shim: %w", err)
+			}
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(rootfsPath), 0o750); err != nil {
 		return Result{}, err
 	}
@@ -190,9 +199,8 @@ func ConvertOCIToExt4(ctx context.Context, ociPath, rootfsPath string, sizeMiB i
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return Result{}, fmt.Errorf("mkfs.ext4: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	cfg, err := readOCIConfig(ociPath)
-	if err != nil {
-		return Result{RootfsPath: rootfsPath}, err
+	if cfgErr != nil {
+		return Result{RootfsPath: rootfsPath}, cfgErr
 	}
 	return Result{OCIPath: ociPath, RootfsPath: rootfsPath, Entrypoint: cfg.Config.Entrypoint, Cmd: cfg.Config.Cmd, Env: cfg.Config.Env, WorkingDir: cfg.Config.WorkingDir}, nil
 }
